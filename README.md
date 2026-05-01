@@ -69,7 +69,45 @@ There are two ways to configure FreeCAD AI:
 - **Edit → Preferences → FreeCAD AI** — provider, model, API key, max tokens, mode, thinking, and tool calling. Persists to FreeCAD's parameter store and mirrors into the workbench config on next load.
 - **Workbench Settings dialog** (gear icon in the chat panel) — everything above plus MCP servers, tool reranking, viewport capture, model parameters, hooks, system prompt overrides, and dock layout.
 
-Both UIs stay in sync. Configuration is stored at `~/.config/FreeCAD/FreeCADAI/config.json`.
+Both UIs stay in sync. Configuration is stored at `<FreeCADAI dir>/config.json`.
+
+### Configuration paths
+
+`<FreeCADAI dir>` is resolved on workbench load. The order is:
+
+1. **`$FREECAD_AI_CONFIG_DIR`** environment variable, if set. Used as-is.
+2. **`<FreeCAD user config dir>/FreeCADAI/`** when the workbench is running inside FreeCAD. On FreeCAD 1.1+ Linux this is `~/.config/FreeCAD/v1-1/FreeCADAI/` (version-scoped, top-level alongside FreeCAD's own `FreeCAD.conf`, `user.cfg`, `system.cfg`). The path is obtained via `FreeCAD.getUserConfigDir()` when available, otherwise derived from `FreeCAD.Version()` plus `$XDG_CONFIG_HOME` (default `~/.config`).
+3. **`~/.config/FreeCAD/FreeCADAI/`** (legacy) when FreeCAD is not importable — pytest, console scripts, plain Python REPL.
+
+> **Why under `.config/FreeCAD/v1-1/`?** FreeCAD 1.1 introduced version-scoped user dirs so different FreeCAD installs don't share settings. The workbench's data is config-shaped (settings, secrets, conversation logs) so it belongs under `XDG_CONFIG_HOME` (default `~/.config/`), not `XDG_DATA_HOME` (`~/.local/share/`, where `Mod/` and `Macro/` live). v0.13.0-alpha aligns with that XDG split.
+
+#### One-shot migration on first launch of v0.13.0-alpha+
+
+Users upgrading from v0.12.x and earlier are auto-migrated on first launch. Migration is rename-then-move with a two-stage candidate search and an automatic sweep:
+
+| # | Action |
+|---|---|
+| 1 | If a stale `FreeCADAI/` already exists at the new target (e.g. created by FreeCAD 1.1's own first-launch migration of `~/.config/FreeCAD/`), rename it to `FreeCADAI.pre-v0.13-snapshot/`. Frees the target name without overwriting. |
+| 2 | Pick the first **historical candidate** that has content as the migration source: (a) `<FreeCAD user data dir>/FreeCADAI/` (the v0.13.0-alpha pre-release wrote here briefly — only relevant on the maintainer's machine; released builds skip this), (b) `~/.config/FreeCAD/FreeCADAI/` (every released build before v0.13.0-alpha). |
+| 3 | **Move** (`shutil.move` — atomic same-filesystem rename when possible) the source → `<FreeCAD user config dir>/FreeCADAI/`. The source ceases to exist; no copy is left behind. |
+| 4 | **Sweep** any remaining historical candidates that *still* have content — rename them to `<candidate>.duplicate-cleanup/` (or `.duplicate-cleanup-<unix-ts>/` if the suffix is taken). Catches data left behind by an aborted/copy-based prior migration. |
+| 5 | Drop a marker file `<target>/.freecad_ai_active_marker` so subsequent imports skip migration. |
+
+The sweep also runs on **every** subsequent launch (cheap when no candidate dirs exist), so any leftover state from a partially-completed prior migration gets cleaned up automatically as soon as the new code runs.
+
+The renamed `*.pre-v0.13-snapshot/` and `*.duplicate-cleanup/` directories are kept untouched as a safety net — safe to delete after you've confirmed the migration succeeded. The migration is idempotent (marker file blocks re-runs), best-effort (logs to stderr and falls back to a candidate path on failure rather than crashing the workbench), and collision-safe (pre-existing backup names get a Unix timestamp appended).
+
+#### Forcing a custom location
+
+Set `FREECAD_AI_CONFIG_DIR` in your environment to bypass the FreeCAD-based resolution entirely. Useful for:
+
+- Running multiple isolated profiles for different LLM accounts
+- Pointing at a synced location (Syncthing, Dropbox)
+- Pinning a fixed path while testing v0.13.0+ migration
+
+```bash
+FREECAD_AI_CONFIG_DIR=~/work/freecad-ai-profile-1 freecad
+```
 
 ### Secure API key storage
 
@@ -154,7 +192,7 @@ Same workflow, but with two execution paths:
 - **Tool calling** (default): The LLM invokes structured tools like `create_primitive`, `boolean_operation`, `fillet_edges`, etc. These are pre-validated operations wrapped in undo transactions — safer and more reliable than raw code.
 - **Code generation** (fallback): When tools are disabled or the LLM generates code blocks instead, code executes with the same safety layers as before (static validation, subprocess sandbox, undo transactions).
 
-Tool calling is enabled by default. Disable it by setting `enable_tools: false` in `~/.config/FreeCAD/FreeCADAI/config.json`.
+Tool calling is enabled by default. Disable it by setting `enable_tools: false` in `<FreeCADAI dir>/config.json`.
 
 ### Available Tools
 
@@ -210,7 +248,7 @@ Tool calling is enabled by default. Disable it by setting `enable_tools: false` 
 
 ### Skills
 
-Skills are reusable instruction sets stored in `~/.config/FreeCAD/FreeCADAI/skills/`. Invoke them by typing `/command` in the chat.
+Skills are reusable instruction sets stored in `<FreeCADAI dir>/skills/`. Invoke them by typing `/command` in the chat.
 
 **Built-in skills:**
 
@@ -228,7 +266,7 @@ Skills are reusable instruction sets stored in `~/.config/FreeCAD/FreeCADAI/skil
 You can create skills manually (see below) or use `/skill-creator` in the chat to have the AI walk you through it.
 
 ```
-~/.config/FreeCAD/FreeCADAI/skills/
+<FreeCADAI dir>/skills/
   my-skill/
     SKILL.md          # Instructions injected into the LLM prompt
     handler.py        # Optional: Python handler with execute(args) function
@@ -244,7 +282,7 @@ If a `handler.py` exists with an `execute(args)` function, it runs directly inst
 
 ### User Extension Tools
 
-You can register your own Python functions as tools that the LLM can call. Place `.py` or `.FCMacro` files in `~/.config/FreeCAD/FreeCADAI/tools/`. Functions with type hints are automatically discovered and registered:
+You can register your own Python functions as tools that the LLM can call. Place `.py` or `.FCMacro` files in `<FreeCADAI dir>/tools/` (see [Configuration paths](#configuration-paths) for what `<FreeCADAI dir>` resolves to on your setup). Functions with type hints are automatically discovered and registered:
 
 ```python
 import math
@@ -299,7 +337,9 @@ Attach files to chat messages via the **Attach** button, drag-and-drop, or paste
 To install the example PDF hook:
 
 ```bash
-cp -r docs/hooks/file-attach-example/ ~/.config/FreeCAD/FreeCADAI/hooks/file-attach/
+# Replace <FreeCADAI dir> with your actual path — see "Configuration paths" above.
+# On FreeCAD 1.1+ Linux this is ~/.config/FreeCAD/v1-1/FreeCADAI/.
+cp -r docs/hooks/file-attach-example/ "<FreeCADAI dir>/hooks/file-attach/"
 # Requires: sudo apt install poppler-utils  (provides pdftotext)
 ```
 
@@ -316,7 +356,7 @@ All parts should have 1mm fillets on external edges.
 Use PartDesign workflow (Body -> Sketch -> Pad), not Part primitives.
 ```
 
-**Search order:** document directory → parent directories (up to 3 levels) → `~/.config/FreeCAD/FreeCADAI/AGENTS.md`
+**Search order:** document directory → parent directories (up to 3 levels) → `<FreeCADAI dir>/AGENTS.md`
 
 **Include directives** — split instructions across files:
 ```markdown

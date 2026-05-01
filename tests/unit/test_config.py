@@ -414,4 +414,449 @@ class TestParamStoreBridge:
         assert cfg_in.enable_tools is False
 
 
+class TestConfigDirResolution:
+    """Migration of config dir for issue #9.
+
+    Pre-v0.13: workbench hardcoded ``~/.config/FreeCAD/FreeCADAI/``. v0.13.0+
+    moves user data to ``<FreeCAD user config dir>/FreeCADAI/`` (on FreeCAD
+    1.1+ Linux: ``~/.config/FreeCAD/v1-1/FreeCADAI/``) so the workbench
+    config lives in the right XDG namespace (XDG_CONFIG_HOME) and follows
+    FreeCAD's version-scoping convention.
+
+    Migration is a one-shot rename-then-move: source candidate(s) → new
+    target. A marker file blocks re-runs. A sweep on every launch renames
+    any historical candidate that still has data to ``.duplicate-cleanup-<ts>/``
+    to recover from an aborted/buggy prior migration.
+    """
+
+    @staticmethod
+    def _stage_config_dir(tmp_path):
+        """Set up a fake FreeCAD user config dir under tmp_path."""
+        cfg = tmp_path / "config" / "FreeCAD" / "v1-1"
+        cfg.mkdir(parents=True)
+        return cfg
+
+    @staticmethod
+    def _stage_uad(tmp_path):
+        """Set up a fake FreeCAD user app data dir under tmp_path (XDG_DATA_HOME)."""
+        uad = tmp_path / "data" / "FreeCAD" / "v1-1"
+        uad.mkdir(parents=True)
+        return uad
+
+    def test_legacy_config_dir_path(self):
+        from freecad_ai.config import _legacy_config_dir
+        assert _legacy_config_dir() == os.path.join(
+            os.path.expanduser("~"), ".config", "FreeCAD", "FreeCADAI"
+        )
+
+    def test_get_freecad_user_app_data_dir_returns_none_outside_freecad(self):
+        """Pytest can't import FreeCAD — function should return None, not raise."""
+        from freecad_ai.config import _get_freecad_user_app_data_dir
+        assert _get_freecad_user_app_data_dir() is None
+
+    def test_new_target_dir_is_user_config_slash_freecadai(self, tmp_path):
+        """Target sits at ``<user config dir>/FreeCADAI/`` — under
+        XDG_CONFIG_HOME (where settings belong), version-scoped, top-level
+        in the FreeCAD config dir alongside FreeCAD's own ``FreeCAD.conf``."""
+        from freecad_ai.config import _new_target_dir
+        from unittest.mock import patch
+
+        cfg = self._stage_config_dir(tmp_path)
+        with patch(
+            "freecad_ai.config._get_freecad_user_config_dir",
+            return_value=str(cfg),
+        ):
+            assert _new_target_dir() == str(cfg / "FreeCADAI")
+
+    def test_new_target_dir_returns_none_when_freecad_unavailable(self):
+        from freecad_ai.config import _new_target_dir
+        from unittest.mock import patch
+
+        with patch(
+            "freecad_ai.config._get_freecad_user_config_dir",
+            return_value=None,
+        ):
+            assert _new_target_dir() is None
+
+    def test_get_freecad_user_config_dir_falls_back_to_version_derivation(
+        self, tmp_path, monkeypatch
+    ):
+        """When FreeCAD.getUserConfigDir() doesn't exist (e.g. older FreeCAD
+        APIs), derive ``$XDG_CONFIG_HOME/FreeCAD/v<M>-<m>/`` from
+        FreeCAD.Version()."""
+        from freecad_ai.config import _get_freecad_user_config_dir
+
+        fake_xdg = tmp_path / "xdg-config"
+        fake_xdg.mkdir()
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(fake_xdg))
+
+        class _FakeFreeCAD:
+            @staticmethod
+            def Version():
+                return ["1", "1", "1", "20260414", "Unknown", "...", "...", "..."]
+            # Note: no getUserConfigDir — forces fallback path
+
+        monkeypatch.setitem(__import__("sys").modules, "FreeCAD", _FakeFreeCAD)
+        result = _get_freecad_user_config_dir()
+        assert result == str(fake_xdg / "FreeCAD" / "v1-1")
+
+    def test_historical_candidate_paths_orders_pre_release_before_legacy(
+        self, tmp_path
+    ):
+        """v0.13.0-alpha pre-release wrote to ``<UAD>/FreeCADAI/`` (under
+        XDG_DATA_HOME, the wrong namespace) only on the maintainer's machine.
+        Listed first so its data wins over the legacy unversioned ~/.config
+        path if both exist (the pre-release write is more recent)."""
+        from freecad_ai.config import _historical_candidate_paths
+        from unittest.mock import patch
+
+        uad = self._stage_uad(tmp_path)
+        with patch(
+            "freecad_ai.config._get_freecad_user_app_data_dir",
+            return_value=str(uad),
+        ):
+            paths = _historical_candidate_paths()
+        assert paths[0] == str(uad / "FreeCADAI")  # pre-release intermediate
+        assert paths[-1] == os.path.join(
+            os.path.expanduser("~"), ".config", "FreeCAD", "FreeCADAI"
+        )  # legacy unversioned
+
+    def test_resolve_config_dir_honors_env_var(self, tmp_path, monkeypatch):
+        from freecad_ai.config import _resolve_config_dir
+        custom = tmp_path / "custom-config"
+        monkeypatch.setenv("FREECAD_AI_CONFIG_DIR", str(custom))
+        result = _resolve_config_dir()
+        assert result == str(custom)
+        assert os.path.isdir(result)
+
+    def test_resolve_config_dir_falls_back_to_legacy_outside_freecad(
+        self, tmp_path, monkeypatch
+    ):
+        """When FreeCAD isn't importable (pytest), use the legacy unversioned
+        path with no migration. Tests must not touch the real legacy dir."""
+        from freecad_ai.config import _resolve_config_dir
+        from unittest.mock import patch
+
+        monkeypatch.delenv("FREECAD_AI_CONFIG_DIR", raising=False)
+        with patch(
+            "freecad_ai.config._get_freecad_user_config_dir",
+            return_value=None,
+        ):
+            result = _resolve_config_dir()
+        assert result == os.path.join(
+            os.path.expanduser("~"), ".config", "FreeCAD", "FreeCADAI"
+        )
+
+    def test_migrate_fresh_install_creates_target_and_marker(self, tmp_path):
+        """No data anywhere — create empty target with marker."""
+        from freecad_ai.config import _ACTIVE_MARKER_FILE, _migrate_to_target
+
+        target = tmp_path / "Mod" / "FreeCADAI"
+        # Candidates that don't exist
+        legacy = tmp_path / "legacy" / "FreeCADAI"
+        prerelease = tmp_path / "uad" / "FreeCADAI"
+
+        _migrate_to_target([str(prerelease), str(legacy)], str(target))
+
+        assert target.is_dir()
+        assert (target / _ACTIVE_MARKER_FILE).exists()
+        assert not legacy.exists()
+        assert not prerelease.exists()
+
+    def test_migrate_legacy_only_moves_to_target(self, tmp_path):
+        """Standard pre-v0.13 user: only the legacy unversioned dir has data.
+        Move it to the new target. Legacy ceases to exist."""
+        from freecad_ai.config import _ACTIVE_MARKER_FILE, _migrate_to_target
+
+        legacy = tmp_path / "config" / "FreeCAD" / "FreeCADAI"
+        legacy.mkdir(parents=True)
+        (legacy / "config.json").write_text('{"mode": "act"}')
+        (legacy / "conversations").mkdir()
+        (legacy / "conversations" / "abc123.json").write_text("[]")
+
+        prerelease = tmp_path / "uad" / "FreeCADAI"  # doesn't exist
+        target = tmp_path / "uad" / "Mod" / "FreeCADAI"
+
+        _migrate_to_target([str(prerelease), str(legacy)], str(target))
+
+        assert target.is_dir()
+        assert (target / "config.json").read_text() == '{"mode": "act"}'
+        assert (target / "conversations" / "abc123.json").exists()
+        assert (target / _ACTIVE_MARKER_FILE).exists()
+        assert not legacy.exists()
+        assert not prerelease.exists()
+
+    def test_migrate_picks_first_candidate_with_content_and_sweeps_others(
+        self, tmp_path
+    ):
+        """Maintainer's recovery case: both ``<UAD>/FreeCADAI/`` (from buggy
+        v0.13.0-alpha pre-release) and ``~/.config/FreeCAD/FreeCADAI/`` (legacy)
+        have content. The pre-release path wins as source (priority order);
+        the legacy path is renamed to ``.duplicate-cleanup``."""
+        from freecad_ai.config import (
+            _ACTIVE_MARKER_FILE,
+            _DUPLICATE_CLEANUP_SUFFIX,
+            _migrate_to_target,
+        )
+
+        prerelease = tmp_path / "uad" / "FreeCADAI"
+        prerelease.mkdir(parents=True)
+        (prerelease / "config.json").write_text('{"src": "prerelease"}')
+
+        legacy = tmp_path / "config" / "FreeCAD" / "FreeCADAI"
+        legacy.mkdir(parents=True)
+        (legacy / "config.json").write_text('{"src": "legacy"}')
+
+        target = tmp_path / "uad" / "Mod" / "FreeCADAI"
+        _migrate_to_target([str(prerelease), str(legacy)], str(target))
+
+        # Source moved to target
+        assert (target / "config.json").read_text() == '{"src": "prerelease"}'
+        assert (target / _ACTIVE_MARKER_FILE).exists()
+        assert not prerelease.exists()
+        # Legacy renamed as duplicate-cleanup backup
+        assert not legacy.exists()
+        legacy_backup = legacy.parent / f"FreeCADAI{_DUPLICATE_CLEANUP_SUFFIX}"
+        assert legacy_backup.is_dir()
+        assert (legacy_backup / "config.json").read_text() == '{"src": "legacy"}'
+
+    def test_migrate_renames_existing_target_without_marker(self, tmp_path):
+        """Edge case: something exists at target without our marker (manual
+        placement, weird setup). Rename to .pre-v0.13-snapshot before moving."""
+        from freecad_ai.config import (
+            _ACTIVE_MARKER_FILE,
+            _SNAPSHOT_BACKUP_SUFFIX,
+            _migrate_to_target,
+        )
+
+        legacy = tmp_path / "config" / "FreeCADAI"
+        legacy.mkdir(parents=True)
+        (legacy / "config.json").write_text('{"src": "legacy"}')
+
+        target = tmp_path / "uad" / "Mod" / "FreeCADAI"
+        target.mkdir(parents=True)
+        (target / "config.json").write_text('{"unexpected": true}')
+
+        _migrate_to_target([str(legacy)], str(target))
+
+        # Pre-existing target preserved with snapshot suffix
+        snapshot = target.parent / f"FreeCADAI{_SNAPSHOT_BACKUP_SUFFIX}"
+        assert snapshot.is_dir()
+        assert (snapshot / "config.json").read_text() == '{"unexpected": true}'
+        # Legacy data is now at target
+        assert (target / "config.json").read_text() == '{"src": "legacy"}'
+        assert (target / _ACTIVE_MARKER_FILE).exists()
+
+    def test_migrate_collision_safe_with_timestamp_suffix(self, tmp_path):
+        """Pre-existing .pre-v0.13-snapshot AND .duplicate-cleanup dirs (from
+        a prior aborted migration) get a timestamp suffix appended on rerun
+        so no data is overwritten."""
+        from freecad_ai.config import (
+            _DUPLICATE_CLEANUP_SUFFIX,
+            _SNAPSHOT_BACKUP_SUFFIX,
+            _migrate_to_target,
+        )
+
+        # Set up: legacy, prerelease both have content; target has stale data.
+        legacy = tmp_path / "config" / "FreeCADAI"
+        legacy.mkdir(parents=True)
+        (legacy / "marker.txt").write_text("legacy v2")
+        prerelease = tmp_path / "uad" / "FreeCADAI"
+        prerelease.mkdir(parents=True)
+        (prerelease / "marker.txt").write_text("prerelease v2")
+
+        target = tmp_path / "uad" / "Mod" / "FreeCADAI"
+        target.mkdir(parents=True)
+        (target / "marker.txt").write_text("stale v2")
+
+        # Stale prior backups
+        prior_snapshot = target.parent / f"FreeCADAI{_SNAPSHOT_BACKUP_SUFFIX}"
+        prior_snapshot.mkdir()
+        (prior_snapshot / "marker.txt").write_text("prior snapshot v1")
+        prior_dup = legacy.parent / f"FreeCADAI{_DUPLICATE_CLEANUP_SUFFIX}"
+        prior_dup.mkdir()
+        (prior_dup / "marker.txt").write_text("prior dup v1")
+
+        _migrate_to_target([str(prerelease), str(legacy)], str(target))
+
+        # Prior backups preserved untouched
+        assert (prior_snapshot / "marker.txt").read_text() == "prior snapshot v1"
+        assert (prior_dup / "marker.txt").read_text() == "prior dup v1"
+        # New backups created with timestamp suffix — both prior + new coexist
+        snapshot_siblings = [
+            p.name for p in target.parent.iterdir()
+            if p.name.startswith(f"FreeCADAI{_SNAPSHOT_BACKUP_SUFFIX}")
+        ]
+        dup_siblings = [
+            p.name for p in legacy.parent.iterdir()
+            if p.name.startswith(f"FreeCADAI{_DUPLICATE_CLEANUP_SUFFIX}")
+        ]
+        assert len(snapshot_siblings) == 2
+        assert len(dup_siblings) == 2
+
+    def test_migrate_skips_marker_only_dir_as_source(self, tmp_path):
+        """A candidate that only contains the marker file (and nothing else)
+        is NOT a real source — skip and try next candidate. Avoids picking
+        up an empty placeholder dir that a prior bad migration left behind."""
+        from freecad_ai.config import _ACTIVE_MARKER_FILE, _migrate_to_target
+
+        # Pre-release path: only contains a stale marker, no real data
+        prerelease = tmp_path / "uad" / "FreeCADAI"
+        prerelease.mkdir(parents=True)
+        (prerelease / _ACTIVE_MARKER_FILE).write_text("stale marker")
+
+        # Legacy path: real data
+        legacy = tmp_path / "config" / "FreeCADAI"
+        legacy.mkdir(parents=True)
+        (legacy / "config.json").write_text('{"src": "legacy"}')
+
+        target = tmp_path / "uad" / "Mod" / "FreeCADAI"
+        _migrate_to_target([str(prerelease), str(legacy)], str(target))
+
+        # Legacy was moved (not the marker-only prerelease)
+        assert (target / "config.json").read_text() == '{"src": "legacy"}'
+        assert not legacy.exists()
+
+    def test_resolve_skips_migration_when_marker_exists_but_still_sweeps(
+        self, tmp_path, monkeypatch
+    ):
+        """When marker exists at target, no full migration runs — but the
+        sweep still fires on every launch and renames any historical
+        candidate that still has content. Recovers from a buggy prior
+        migration that left duplicates."""
+        from freecad_ai.config import (
+            _ACTIVE_MARKER_FILE,
+            _DUPLICATE_CLEANUP_SUFFIX,
+            _resolve_config_dir,
+        )
+        from unittest.mock import patch
+
+        monkeypatch.delenv("FREECAD_AI_CONFIG_DIR", raising=False)
+        cfg = self._stage_config_dir(tmp_path)
+        uad = self._stage_uad(tmp_path)
+        target = cfg / "FreeCADAI"
+        target.mkdir()
+        (target / _ACTIVE_MARKER_FILE).write_text("already migrated")
+        (target / "config.json").write_text('{"src": "target"}')
+
+        # Stale duplicate at the legacy unversioned location (from a buggy
+        # copy-based migration in the v0.13.0-alpha pre-release)
+        fake_legacy = tmp_path / "fake-home" / ".config" / "FreeCAD" / "FreeCADAI"
+        fake_legacy.mkdir(parents=True)
+        (fake_legacy / "config.json").write_text("stale duplicate from copy migration")
+
+        with patch(
+            "freecad_ai.config._get_freecad_user_config_dir",
+            return_value=str(cfg),
+        ), patch(
+            "freecad_ai.config._get_freecad_user_app_data_dir",
+            return_value=str(uad),
+        ), patch(
+            "freecad_ai.config._legacy_config_dir",
+            return_value=str(fake_legacy),
+        ):
+            result = _resolve_config_dir()
+
+        assert result == str(target)
+        # Target untouched
+        assert (target / "config.json").read_text() == '{"src": "target"}'
+        # Stale duplicate renamed out of the way
+        assert not fake_legacy.exists()
+        legacy_backup = fake_legacy.parent / f"FreeCADAI{_DUPLICATE_CLEANUP_SUFFIX}"
+        assert legacy_backup.is_dir()
+        assert (legacy_backup / "config.json").read_text() == "stale duplicate from copy migration"
+
+    def test_resolve_no_op_when_marker_present_and_no_stale_legacy(
+        self, tmp_path, monkeypatch
+    ):
+        """Steady state: marker present, no leftover candidates. Resolution
+        returns target without touching the filesystem at all."""
+        from freecad_ai.config import _ACTIVE_MARKER_FILE, _resolve_config_dir
+        from unittest.mock import patch
+
+        monkeypatch.delenv("FREECAD_AI_CONFIG_DIR", raising=False)
+        cfg = self._stage_config_dir(tmp_path)
+        uad = self._stage_uad(tmp_path)
+        target = cfg / "FreeCADAI"
+        target.mkdir()
+        (target / _ACTIVE_MARKER_FILE).write_text("already migrated")
+        (target / "config.json").write_text('{"mode": "act"}')
+
+        # Legacy points somewhere that doesn't exist
+        fake_legacy = tmp_path / "doesnt-exist" / "FreeCADAI"
+
+        with patch(
+            "freecad_ai.config._get_freecad_user_config_dir",
+            return_value=str(cfg),
+        ), patch(
+            "freecad_ai.config._get_freecad_user_app_data_dir",
+            return_value=str(uad),
+        ), patch(
+            "freecad_ai.config._legacy_config_dir",
+            return_value=str(fake_legacy),
+        ):
+            marker_mtime_before = (target / _ACTIVE_MARKER_FILE).stat().st_mtime
+            result = _resolve_config_dir()
+            marker_mtime_after = (target / _ACTIVE_MARKER_FILE).stat().st_mtime
+
+        assert result == str(target)
+        assert marker_mtime_before == marker_mtime_after  # marker not rewritten
+
+    def test_resolve_runs_full_migration_then_marker_blocks_rerun(
+        self, tmp_path, monkeypatch
+    ):
+        """End-to-end: first call moves first-priority candidate → target,
+        sweeps remaining candidates, drops marker. Second call is a no-op
+        (no candidates left, marker present)."""
+        from freecad_ai.config import (
+            _ACTIVE_MARKER_FILE,
+            _DUPLICATE_CLEANUP_SUFFIX,
+            _resolve_config_dir,
+        )
+        from unittest.mock import patch
+
+        monkeypatch.delenv("FREECAD_AI_CONFIG_DIR", raising=False)
+
+        # Maintainer-recovery scenario: data at both the v0.13.0-alpha
+        # pre-release path (UAD/FreeCADAI) AND the legacy unversioned path.
+        # Pre-release wins as migration source.
+        cfg = self._stage_config_dir(tmp_path)
+        uad = self._stage_uad(tmp_path)
+        prerelease = uad / "FreeCADAI"
+        prerelease.mkdir()
+        (prerelease / "config.json").write_text('{"src": "prerelease"}')
+
+        fake_legacy = tmp_path / "fake-home" / ".config" / "FreeCAD" / "FreeCADAI"
+        fake_legacy.mkdir(parents=True)
+        (fake_legacy / "config.json").write_text('{"src": "legacy"}')
+
+        target = cfg / "FreeCADAI"
+
+        with patch(
+            "freecad_ai.config._get_freecad_user_config_dir",
+            return_value=str(cfg),
+        ), patch(
+            "freecad_ai.config._get_freecad_user_app_data_dir",
+            return_value=str(uad),
+        ), patch(
+            "freecad_ai.config._legacy_config_dir",
+            return_value=str(fake_legacy),
+        ):
+            first = _resolve_config_dir()
+            assert first == str(target)
+            assert (target / _ACTIVE_MARKER_FILE).exists()
+            assert (target / "config.json").read_text() == '{"src": "prerelease"}'
+            assert not prerelease.exists()
+            assert not fake_legacy.exists()
+            # Legacy was swept (not deleted, not pure-moved — renamed for safety)
+            legacy_backup = fake_legacy.parent / f"FreeCADAI{_DUPLICATE_CLEANUP_SUFFIX}"
+            assert legacy_backup.is_dir()
+            assert (legacy_backup / "config.json").read_text() == '{"src": "legacy"}'
+
+            marker_mtime = (target / _ACTIVE_MARKER_FILE).stat().st_mtime
+            second = _resolve_config_dir()
+            assert second == str(target)
+            assert (target / _ACTIVE_MARKER_FILE).stat().st_mtime == marker_mtime
+
+
 import os

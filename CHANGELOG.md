@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.13.0-alpha] - 2026-05-01
+
+Aligns the workbench's config dir with FreeCAD 1.1's version-scoped user dirs. Reported by @egandro on issue #9 — users on FreeCAD 1.1+ saw two `FreeCADAI/` trees side-by-side: the live unversioned one at `~/.config/FreeCAD/FreeCADAI/`, plus a stale snapshot inside `~/.config/FreeCAD/v1-1/` that FreeCAD 1.1's own first-launch migration of the legacy `~/.config/FreeCAD/` tree created. Documentation referenced the unversioned path throughout, but FreeCAD's actual version-scoped config layout drifted from where the workbench was writing.
+
+### Changed
+
+- **Config dir now resolves to `<FreeCAD user config dir>/FreeCADAI/`** — `freecad_ai/config.py` no longer hardcodes `~/.config/FreeCAD/FreeCADAI/`. New resolution order (highest to lowest precedence): `$FREECAD_AI_CONFIG_DIR` env var → `<user-config-dir>/FreeCADAI/` (on FreeCAD 1.1+ Linux: `~/.config/FreeCAD/v1-1/FreeCADAI/`) → `~/.config/FreeCAD/FreeCADAI/` (legacy fallback for pytest, console scripts, plain Python REPL). The user-config-dir is obtained via `FreeCAD.getUserConfigDir()` if the API exposes it, otherwise derived from `FreeCAD.Version()` plus `$XDG_CONFIG_HOME`. Constants `CONFIG_DIR`, `CONFIG_FILE`, `CONVERSATIONS_DIR`, `SKILLS_DIR`, `USER_TOOLS_DIR`, `HOOKS_DIR` are still importable module attributes — value is computed once at import time, so all 30+ consumers keep working without code changes.
+- **Path lives under `XDG_CONFIG_HOME`, not `XDG_DATA_HOME`** — workbench data is config-shaped (settings, secrets, conversation logs) so it belongs alongside FreeCAD's own `FreeCAD.conf` / `user.cfg` / `system.cfg`. `Mod/` and `Macro/` (under `XDG_DATA_HOME`) are for code, not config; the FreeCAD AI workbench code itself is still installed under `Mod/freecad-ai/`.
+
+### Migration
+
+- **One-shot config migration on first launch of v0.13.0-alpha+** — runs lazily on first import of `freecad_ai.config` inside FreeCAD. Rename-then-move with a two-stage candidate search:
+  1. If `<target>` already exists *without* a marker (e.g. a stale `FreeCADAI/` left by FreeCAD's own first-launch migration), rename it to `<target>.pre-v0.13-snapshot/` — frees the name without overwriting.
+  2. Pick the first **historical candidate** with user content as migration source. Order: (a) `<FreeCAD user data dir>/FreeCADAI/` (the v0.13.0-alpha pre-release wrote here briefly under XDG_DATA_HOME, only relevant on the maintainer's machine), (b) `~/.config/FreeCAD/FreeCADAI/` (every released build before v0.13.0-alpha).
+  3. `shutil.move` the source → target. Atomic same-filesystem rename when possible, copy-then-remove fallback for cross-device moves. Source ceases to exist.
+  4. **Sweep**: any remaining historical candidates that still have content get renamed to `<candidate>.duplicate-cleanup/` (timestamped if name collision). Catches duplicates left by an aborted prior migration. Sweep runs on every launch, not just first migration.
+  5. Drop `.freecad_ai_active_marker` in target.
+- **Idempotent on subsequent runs** — marker file blocks re-migration; the sweep still runs (cheap if no candidates exist).
+- **Best-effort fallback on migration failure** — if `_migrate_to_target` raises, log to stderr and fall back to a candidate path that still exists so the workbench loads. Does not crash.
+- **Collision-safe** — pre-existing `*.pre-v0.13-snapshot/` or `*.duplicate-cleanup/` from a prior aborted migration is preserved with a Unix-timestamp suffix appended to the new backup name.
+- **`FREECAD_AI_CONFIG_DIR` env var override** — bypasses FreeCAD-based resolution entirely. Useful for isolated profiles, sync-friendly locations, or pinning a fixed path during testing.
+
+### Docs
+
+- **Canonical "Configuration paths" section** in README and wiki `Configuration.md` documents the resolution order, the five-step migration, backup-dir semantics, and the env-var override. Path references throughout README + wiki use the `<FreeCADAI dir>` placeholder consistently, with the canonical section as the source of truth — no more literal `~/.config/FreeCAD/FreeCADAI/` paths that drift from the actual location on FreeCAD 1.1+.
+- **Wiki**: `Configuration.md`, `Architecture.md`, `Skills.md`, `Skills-Reference.md`, `Creating-Skills.md`, `Creating-Custom-Tools.md`, `Tool-Reranking.md`, `MCP-Integration.md`, `AGENTS-md.md`, `Getting-Started.md`, `FAQ.md` updated.
+
 ## [0.12.1-alpha] - 2026-04-28
 
 Patch release fixing the Edit → Preferences page showing blank fields after a v0.12.0 install.

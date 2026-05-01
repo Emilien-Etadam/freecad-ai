@@ -1,14 +1,303 @@
 """Configuration system for FreeCAD AI.
 
-Stores settings as JSON at ~/.config/FreeCAD/FreeCADAI/config.json
+Stores settings as JSON at <config-dir>/config.json. Path resolution:
+
+  1. ``$FREECAD_AI_CONFIG_DIR`` env var when set (tests, power users).
+  2. ``<FreeCAD user config dir>/FreeCADAI/`` when FreeCAD is importable.
+     On FreeCAD 1.1+ this is ``~/.config/FreeCAD/v1-1/FreeCADAI/`` (or platform
+     equivalent — version-scoped under XDG_CONFIG_HOME). We use the user
+     *config* dir (XDG_CONFIG_HOME) rather than the user *data* dir
+     (XDG_DATA_HOME, where ``Mod/`` lives) because the workbench stores
+     config-shaped data: settings, secrets, conversation logs.
+  3. ``~/.config/FreeCAD/FreeCADAI/`` legacy fallback when FreeCAD is not
+     importable (pytest, console scripts, plain Python REPL).
+
+A one-shot migration runs on first import per (target, marker) pair. The
+migration looks at *historical candidate paths* in priority order, picks
+the first one that has data as the source, ``shutil.move``s it to the new
+target, and renames any stale leftovers as ``.duplicate-cleanup-<ts>/``.
+A marker file inside the new target blocks subsequent re-runs.
+
+On every launch (whether or not migration ran), a sweep also fires: if the
+marker is present and any historical candidate path *still* has content,
+that path is renamed as ``.duplicate-cleanup-<ts>/``. Catches the case
+where an aborted/buggy prior migration left duplicate data behind.
 """
 
+import datetime
 import json
 import os
+import shutil
+import sys
+import time
 from dataclasses import dataclass, field, asdict
 
 
-CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "FreeCAD", "FreeCADAI")
+# Marker filename inside the active config dir. Its presence signals that
+# this version of the workbench has already migrated into this target.
+_ACTIVE_MARKER_FILE = ".freecad_ai_active_marker"
+
+# Suffix used when target itself exists without a marker (rare; would mean
+# someone manually placed something at the target path). Renamed out of
+# the way so the move can proceed without overwriting.
+_SNAPSHOT_BACKUP_SUFFIX = ".pre-v0.13-snapshot"
+
+# Suffix used when a historical candidate path still has data after migration
+# has already completed. The path is renamed; user can rm when confident.
+_DUPLICATE_CLEANUP_SUFFIX = ".duplicate-cleanup"
+
+
+def _legacy_config_dir() -> str:
+    """The pre-v0.13 unversioned config dir (~/.config/FreeCAD/FreeCADAI).
+
+    Every workbench release before v0.13.0-alpha hardcoded this path, so
+    every existing user has data here. The most common migration source.
+    """
+    return os.path.join(os.path.expanduser("~"), ".config", "FreeCAD", "FreeCADAI")
+
+
+def _get_freecad_user_app_data_dir():
+    """Return ``FreeCAD.getUserAppDataDir()``, or None if FreeCAD isn't importable.
+
+    On FreeCAD 1.1+ Linux this is e.g. ``~/.local/share/FreeCAD/v1-1/`` (XDG
+    data dir, version-scoped — where ``Mod/``, ``Macro/`` live). Used only
+    to locate the historical ``<UAD>/FreeCADAI/`` path that the buggy
+    v0.13.0-alpha pre-release wrote to on the maintainer's machine; not the
+    canonical config target.
+    """
+    try:
+        import FreeCAD
+        path = FreeCAD.getUserAppDataDir()
+        return path or None
+    except Exception:
+        return None
+
+
+def _get_freecad_user_config_dir():
+    """Return the version-scoped user config dir for the current FreeCAD,
+    or None when FreeCAD isn't importable.
+
+    Tries ``FreeCAD.getUserConfigDir()`` first (likely available on FreeCAD
+    1.1+; we don't assume — falls through if absent). Otherwise derives
+    ``<XDG_CONFIG_HOME>/FreeCAD/v<major>-<minor>/`` from ``FreeCAD.Version()``
+    and ``$XDG_CONFIG_HOME`` (default ``~/.config``).
+
+    The version segment matches FreeCAD's own naming (``v1-1`` for 1.1.x,
+    not ``1.1`` or ``v1.1``) so the workbench config sits in the same
+    directory as FreeCAD's own ``v1-1/FreeCAD.conf``, ``user.cfg``, etc.
+    """
+    try:
+        import FreeCAD
+        getter = getattr(FreeCAD, "getUserConfigDir", None)
+        if getter is not None:
+            path = getter()
+            if path:
+                return path
+        version = FreeCAD.Version()
+        if version and len(version) >= 2:
+            major = str(version[0]).strip()
+            minor = str(version[1]).strip()
+            xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+                os.path.expanduser("~"), ".config"
+            )
+            return os.path.join(xdg, "FreeCAD", f"v{major}-{minor}")
+    except Exception:
+        pass
+    return None
+
+
+def _new_target_dir():
+    """The v0.13.0+ canonical user config path: ``<user config dir>/FreeCADAI/``.
+
+    Returns None when FreeCAD isn't importable. Callers fall back to the
+    legacy unversioned path in that case so tests / console scripts still work.
+    """
+    base = _get_freecad_user_config_dir()
+    if not base:
+        return None
+    return os.path.join(base, "FreeCADAI")
+
+
+def _historical_candidate_paths() -> list[str]:
+    """Paths the workbench may have written to in past or pre-release builds.
+
+    Listed in source-priority order: first one that has user content wins
+    as the migration source; remaining ones get swept to ``.duplicate-cleanup``.
+    The new target (``<user config dir>/FreeCADAI/``) is intentionally NOT
+    in this list — it's the destination, not a source. If the new target
+    already exists without our marker it'll be treated as a stale snapshot
+    by ``_migrate_to_target`` and renamed to ``.pre-v0.13-snapshot``.
+    """
+    candidates: list[str] = []
+    uad = _get_freecad_user_app_data_dir()
+    if uad:
+        # v0.13.0-alpha pre-release wrote to ``<UAD>/FreeCADAI/`` (under
+        # XDG_DATA_HOME, wrong namespace). Released builds went straight
+        # to the user config dir. Only relevant for the maintainer's
+        # machine. Listed first: if both this and the legacy unversioned
+        # path exist, this one wins as source because the pre-release
+        # write was more recent.
+        candidates.append(os.path.join(uad, "FreeCADAI"))
+    # Pre-v0.13: hardcoded ~/.config/FreeCAD/FreeCADAI/. Every released build.
+    candidates.append(_legacy_config_dir())
+    return candidates
+
+
+def _drop_marker(target: str) -> None:
+    """Write the active-dir marker file inside *target*."""
+    marker = os.path.join(target, _ACTIVE_MARKER_FILE)
+    with open(marker, "w") as f:
+        f.write(
+            "FreeCAD AI v0.13.0+ -- active config dir.\n"
+            f"Created: {datetime.datetime.now().isoformat()}\n"
+            "Removing this file will trigger re-migration on next launch.\n"
+        )
+
+
+def _has_user_content(path: str) -> bool:
+    """True if *path* is a directory containing more than just the marker file.
+
+    A bare marker file means a previous migration created an empty target
+    here — not a real source we should migrate from.
+    """
+    if not os.path.isdir(path):
+        return False
+    try:
+        entries = [e for e in os.listdir(path) if e != _ACTIVE_MARKER_FILE]
+    except OSError:
+        return False
+    return bool(entries)
+
+
+def _rename_with_collision_suffix(src: str, base_suffix: str) -> str:
+    """Rename *src* to ``src + base_suffix``, appending a Unix timestamp if
+    that name is already taken. Returns the resolved backup path."""
+    backup = src + base_suffix
+    if os.path.exists(backup):
+        backup = f"{backup}-{int(time.time())}"
+    os.rename(src, backup)
+    return backup
+
+
+def _sweep_stale_candidates(candidates: list[str], target: str) -> list[str]:
+    """Rename every candidate that still has content out of the way.
+
+    Skips ``target`` itself (no rename to backup of the active dir!) and
+    any candidate that doesn't exist or has no user content. Returns the
+    list of renamed paths so callers can log them.
+    """
+    target_real = os.path.realpath(target)
+    renamed: list[str] = []
+    for c in candidates:
+        if not _has_user_content(c):
+            continue
+        if os.path.realpath(c) == target_real:
+            continue
+        try:
+            renamed.append(_rename_with_collision_suffix(c, _DUPLICATE_CLEANUP_SUFFIX))
+        except OSError as e:
+            print(
+                f"FreeCAD AI: could not rename stale dir {c} ({e!r}); leaving in place",
+                file=sys.stderr,
+            )
+    return renamed
+
+
+def _migrate_to_target(candidates: list[str], target: str) -> None:
+    """One-shot migration. Moves the first candidate with content to *target*.
+
+    Preconditions:
+      * No marker file exists in *target* (caller verified).
+
+    Steps:
+      1. If *target* exists without a marker (unexpected — Mod/ is FreeCAD's
+         code dir, not data — but possible on weird setups), rename it
+         out of the way to ``<target>.pre-v0.13-snapshot[-ts]/``.
+      2. Find the first candidate that has user content. ``shutil.move`` it
+         to *target*. If none exist, create an empty *target*.
+      3. Sweep any remaining candidates that still have content (renamed
+         to ``.duplicate-cleanup[-ts]/``).
+      4. Drop the marker file.
+
+    No backup of the moved candidate is kept — its data lives at *target*
+    after the move. Other candidates are renamed (not deleted) as a safety
+    net since they may pre-date our marker semantics.
+    """
+    target_real_pre = os.path.realpath(target) if os.path.exists(target) else target
+
+    if os.path.isdir(target):
+        _rename_with_collision_suffix(target, _SNAPSHOT_BACKUP_SUFFIX)
+
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+
+    source = next((c for c in candidates if _has_user_content(c)), None)
+
+    # If a candidate's realpath equals the target's, the move would be a
+    # no-op rename onto itself; just ensure the dir + marker.
+    if source and os.path.realpath(source) == target_real_pre:
+        os.makedirs(target, exist_ok=True)
+        remaining = [c for c in candidates if c != source]
+    elif source:
+        shutil.move(source, target)
+        remaining = [c for c in candidates if c != source]
+    else:
+        os.makedirs(target, exist_ok=True)
+        remaining = list(candidates)
+
+    _sweep_stale_candidates(remaining, target)
+    _drop_marker(target)
+
+
+def _resolve_config_dir() -> str:
+    """Resolve the active workbench config dir.
+
+    Runs migration if it hasn't yet (no marker at target). On every launch,
+    sweeps any stale historical candidate dirs that still have content —
+    catches the case where an aborted/buggy prior migration (e.g. the
+    v0.13.0-alpha-pre-release copy-based draft) left duplicate data behind.
+
+    On migration failure logs to stderr and falls back to a candidate path
+    that still exists, so the workbench still loads. Better degraded than
+    dead.
+    """
+    env = os.environ.get("FREECAD_AI_CONFIG_DIR")
+    if env:
+        os.makedirs(env, exist_ok=True)
+        return env
+
+    target = _new_target_dir()
+    if target is None:
+        return _legacy_config_dir()
+
+    candidates = _historical_candidate_paths()
+    marker_path = os.path.join(target, _ACTIVE_MARKER_FILE)
+
+    if os.path.exists(marker_path):
+        try:
+            _sweep_stale_candidates(candidates, target)
+        except Exception as e:
+            print(
+                f"FreeCAD AI: stale legacy sweep failed ({e!r}); leaving as-is",
+                file=sys.stderr,
+            )
+        return target
+
+    try:
+        _migrate_to_target(candidates, target)
+        return target
+    except Exception as e:
+        print(
+            f"FreeCAD AI: config migration to {target} failed ({e!r}); "
+            f"falling back to a legacy candidate",
+            file=sys.stderr,
+        )
+        for c in candidates:
+            if os.path.isdir(c):
+                return c
+        return candidates[-1] if candidates else _legacy_config_dir()
+
+
+CONFIG_DIR = _resolve_config_dir()
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 CONVERSATIONS_DIR = os.path.join(CONFIG_DIR, "conversations")
 SKILLS_DIR = os.path.join(CONFIG_DIR, "skills")
