@@ -30,6 +30,7 @@ import os
 import shutil
 import sys
 import time
+import time
 from dataclasses import dataclass, field, asdict
 
 
@@ -303,6 +304,54 @@ CONVERSATIONS_DIR = os.path.join(CONFIG_DIR, "conversations")
 SKILLS_DIR = os.path.join(CONFIG_DIR, "skills")
 USER_TOOLS_DIR = os.path.join(CONFIG_DIR, "tools")
 HOOKS_DIR = os.path.join(CONFIG_DIR, "hooks")
+LOGS_DIR = os.path.join(CONFIG_DIR, "logs")
+
+
+def prune_oldest_files(
+    directory: str,
+    pattern_fn,
+    keep: int,
+    max_age_days: int = 0,
+) -> int:
+    """Delete files in *directory* matching *pattern_fn* by retention rules.
+
+    A file survives only if both checks pass:
+      * It's within the *keep* newest matches (by mtime). 0 disables this check.
+      * Its mtime is younger than *max_age_days*. 0 disables this check.
+
+    Files violating either condition are deleted. Returns the number of files
+    deleted. Best-effort — individual unlink errors are swallowed so callers
+    can use this from save paths without disrupting the user.
+    """
+    if not os.path.isdir(directory):
+        return 0
+    matches = [
+        os.path.join(directory, name)
+        for name in os.listdir(directory)
+        if pattern_fn(name)
+    ]
+    if not matches:
+        return 0
+
+    # Newest-first; index < keep is "within count cap".
+    matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+
+    cutoff_mtime = None
+    if max_age_days > 0:
+        cutoff_mtime = time.time() - (max_age_days * 86400)
+
+    deleted = 0
+    for idx, path in enumerate(matches):
+        over_count = keep > 0 and idx >= keep
+        too_old = cutoff_mtime is not None and os.path.getmtime(path) < cutoff_mtime
+        if not (over_count or too_old):
+            continue
+        try:
+            os.remove(path)
+            deleted += 1
+        except OSError:
+            pass
+    return deleted
 
 # Provider presets — derived from the canonical PROVIDERS dict in llm/providers.py.
 # Each preset contains only base_url and default_model (the fields the Settings
@@ -396,6 +445,14 @@ class AppConfig:
     # fires in that case).
     chat_dock_mw_state: str = ""
 
+    # Retention applied lazily on save. Both dimensions are checked: a file is
+    # kept only if it's both within the newest-N AND younger than max_age_days.
+    # All default to 0 (disabled) so an upgrade from v0.13.0-alpha never
+    # silently deletes user files — opt in via config.json.
+    max_saved_conversations: int = 0
+    max_session_logs: int = 0
+    max_retention_age_days: int = 0
+
     @property
     def supports_vision(self) -> bool:
         """Whether the current LLM supports vision (images in content blocks)."""
@@ -434,7 +491,7 @@ class AppConfig:
 
 def _ensure_dirs():
     """Create config directories if they don't exist."""
-    for d in (CONFIG_DIR, CONVERSATIONS_DIR, SKILLS_DIR, USER_TOOLS_DIR, HOOKS_DIR):
+    for d in (CONFIG_DIR, CONVERSATIONS_DIR, SKILLS_DIR, USER_TOOLS_DIR, HOOKS_DIR, LOGS_DIR):
         os.makedirs(d, exist_ok=True)
 
 

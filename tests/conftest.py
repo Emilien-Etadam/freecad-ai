@@ -22,11 +22,14 @@ def tmp_config_dir(tmp_path, monkeypatch):
     conv_dir.mkdir()
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
 
     monkeypatch.setattr(config_mod, "CONFIG_DIR", str(config_dir))
     monkeypatch.setattr(config_mod, "CONFIG_FILE", str(config_dir / "config.json"))
     monkeypatch.setattr(config_mod, "CONVERSATIONS_DIR", str(conv_dir))
     monkeypatch.setattr(config_mod, "SKILLS_DIR", str(skills_dir))
+    monkeypatch.setattr(config_mod, "LOGS_DIR", str(logs_dir))
 
     return tmp_path
 

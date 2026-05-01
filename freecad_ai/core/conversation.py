@@ -17,7 +17,7 @@ import os
 import time
 from dataclasses import dataclass, field
 
-from ..config import CONVERSATIONS_DIR
+from ..config import CONVERSATIONS_DIR, get_config, prune_oldest_files
 
 
 @dataclass
@@ -394,6 +394,13 @@ class Conversation:
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
+        cfg = get_config()
+        prune_oldest_files(
+            CONVERSATIONS_DIR,
+            lambda n: n.endswith(".json"),
+            cfg.max_saved_conversations,
+            cfg.max_retention_age_days,
+        )
 
     @classmethod
     def load(cls, conversation_id: str) -> "Conversation":

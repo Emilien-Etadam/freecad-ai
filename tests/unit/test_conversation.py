@@ -340,6 +340,115 @@ class TestPersistence:
         assert Conversation.list_saved() == []
 
 
+class TestRetention:
+    def test_save_prunes_oldest_when_cap_exceeded(self, tmp_config_dir, monkeypatch):
+        import freecad_ai.config as config_mod
+        import freecad_ai.core.conversation as conv_mod
+        conv_dir = os.path.join(str(tmp_config_dir), "conversations")
+        monkeypatch.setattr(conv_mod, "CONVERSATIONS_DIR", conv_dir)
+
+        # Inject a config with a small cap so pruning is testable in <10 saves.
+        from freecad_ai.config import AppConfig
+        config_mod._config = AppConfig(max_saved_conversations=3)
+
+        # Save 5 conversations with explicit, increasing mtimes so retention is deterministic.
+        ids = [f"conv-{i}" for i in range(5)]
+        for i, cid in enumerate(ids):
+            c = Conversation(conversation_id=cid)
+            c.add_user_message(f"msg-{i}")
+            c.save()
+            os.utime(os.path.join(conv_dir, f"{cid}.json"), (1000.0 + i, 1000.0 + i))
+
+        # Trigger one more save — now retention runs and trims to 3 newest.
+        Conversation(conversation_id="conv-final").save()
+        os.utime(os.path.join(conv_dir, "conv-final.json"), (2000.0, 2000.0))
+
+        # Re-run prune so the final save's mtime is considered.
+        from freecad_ai.config import prune_oldest_files
+        prune_oldest_files(conv_dir, lambda n: n.endswith(".json"), 3)
+
+        remaining = sorted(os.listdir(conv_dir))
+        assert remaining == ["conv-3.json", "conv-4.json", "conv-final.json"]
+
+    def test_save_below_cap_keeps_everything(self, tmp_config_dir, monkeypatch):
+        import freecad_ai.config as config_mod
+        import freecad_ai.core.conversation as conv_mod
+        conv_dir = os.path.join(str(tmp_config_dir), "conversations")
+        monkeypatch.setattr(conv_mod, "CONVERSATIONS_DIR", conv_dir)
+
+        from freecad_ai.config import AppConfig
+        config_mod._config = AppConfig(max_saved_conversations=100)
+
+        for i in range(5):
+            Conversation(conversation_id=f"conv-{i}").save()
+
+        assert len(os.listdir(conv_dir)) == 5
+
+    def test_default_config_disables_retention(self, tmp_config_dir, monkeypatch):
+        """Backwards-compat: a fresh AppConfig must not prune anything.
+
+        Ensures upgrading from v0.13.0-alpha doesn't silently delete files
+        for users who never opt into retention.
+        """
+        import freecad_ai.config as config_mod
+        import freecad_ai.core.conversation as conv_mod
+        conv_dir = os.path.join(str(tmp_config_dir), "conversations")
+        monkeypatch.setattr(conv_mod, "CONVERSATIONS_DIR", conv_dir)
+
+        from freecad_ai.config import AppConfig
+        cfg = AppConfig()
+        assert cfg.max_saved_conversations == 0
+        assert cfg.max_session_logs == 0
+        assert cfg.max_retention_age_days == 0
+        config_mod._config = cfg
+
+        # Pre-seed with 200 old conversations — well past any sensible cap.
+        import time as _time
+        old_mtime = _time.time() - (365 * 86400)
+        for i in range(200):
+            cid = f"legacy-{i:03d}"
+            Conversation(conversation_id=cid).save()
+            os.utime(os.path.join(conv_dir, f"{cid}.json"), (old_mtime, old_mtime))
+
+        # Trigger another save — defaults should leave everything untouched.
+        Conversation(conversation_id="new").save()
+        assert len(os.listdir(conv_dir)) == 201
+
+    def test_save_prunes_by_age(self, tmp_config_dir, monkeypatch):
+        import freecad_ai.config as config_mod
+        import freecad_ai.core.conversation as conv_mod
+        conv_dir = os.path.join(str(tmp_config_dir), "conversations")
+        monkeypatch.setattr(conv_mod, "CONVERSATIONS_DIR", conv_dir)
+
+        from freecad_ai.config import AppConfig
+        config_mod._config = AppConfig(
+            max_saved_conversations=100,    # count cap won't trigger
+            max_retention_age_days=7,       # 7-day window
+        )
+
+        # Save 3 convs and post-date them: two ~10 days old (should prune),
+        # one ~1 day old (should keep). Pruning runs on the *next* save.
+        import time as _time
+        now = _time.time()
+        old_mtime = now - (10 * 86400)
+        recent_mtime = now - (1 * 86400)
+        for i in range(2):
+            cid = f"old-{i}"
+            Conversation(conversation_id=cid).save()
+            os.utime(os.path.join(conv_dir, f"{cid}.json"), (old_mtime, old_mtime))
+        Conversation(conversation_id="recent").save()
+        os.utime(os.path.join(conv_dir, "recent.json"), (recent_mtime, recent_mtime))
+
+        # Trigger pruning via a fresh save (its prune call will sweep old files).
+        Conversation(conversation_id="trigger").save()
+
+        remaining = sorted(os.listdir(conv_dir))
+        assert "old-0.json" not in remaining
+        assert "old-1.json" not in remaining
+        assert "recent.json" in remaining
+        assert "trigger.json" in remaining
+
+
 class TestCompactionEnabled:
     def test_compaction_enabled_default_true(self):
         from freecad_ai.core.conversation import Conversation

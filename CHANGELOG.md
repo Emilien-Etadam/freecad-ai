@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.13.1-alpha] - 2026-05-01
+
+Patch release. Fixes a v0.13.0-alpha follow-up: session logs were still writing to the legacy hardcoded path after the migration. Adds bounded retention so `<FreeCADAI dir>/conversations/` and `<FreeCADAI dir>/logs/` no longer grow without limit.
+
+### Fixed
+
+- **Session logs now follow `CONFIG_DIR`** — `_save_session_log` and `_auto_save_log` in `freecad_ai/ui/chat_widget.py` had a hardcoded `~/.config/FreeCAD/FreeCADAI/logs` path that escaped the v0.13.0-alpha config-dir migration. After upgrade the rest of the workbench config moved to `<FreeCAD user config dir>/FreeCADAI/` but new session logs continued landing in the legacy unversioned location. Both methods now use the new `LOGS_DIR` constant from `freecad_ai/config.py`, which is computed as `os.path.join(CONFIG_DIR, "logs")` and so picks up any future config-dir change automatically.
+
+### Added
+
+- **Opt-in retention, configurable via `config.json`** — `Conversation.save()` and `_save_session_log()` can now prune the oldest files in their respective directories, but **disabled by default** to preserve v0.13.0-alpha behavior on upgrade. Three new `AppConfig` fields, all defaulting to `0` (= dimension disabled):
+  - `max_saved_conversations` — count cap on `<FreeCADAI dir>/conversations/conv_*.json`. Suggested opt-in: `100` (the Load dialog already only shows the newest 20).
+  - `max_session_logs` — count cap on `<FreeCADAI dir>/logs/session_*.json`. The auto-saved `latest_session.json` is a single file and exempt. Suggested opt-in: `50`.
+  - `max_retention_age_days` — age cap applied to both directories. Files older than this are deleted regardless of count.
+  - Both dimensions combine: a file is kept only if it's both within the newest-N AND younger than the age cap. Setting all three to `0` (the default) disables retention entirely — nothing is ever auto-deleted.
+- **`prune_oldest_files(directory, pattern_fn, keep, max_age_days=0)`** in `freecad_ai/config.py` — generic helper used by both call sites. Files ranked by mtime (newest preserved). Best-effort: missing directories and individual `unlink` failures don't disrupt save paths.
+
+### Tests
+
+- 12 new tests in `TestPruneOldestFiles`, `TestLogsDir`, and `TestRetention`: mtime-ordered pruning, pattern filter, below-cap short-circuit, missing-directory no-op, age-cap-only pruning, count-and-age combined (union semantics), zero-zero disables pruning, `LOGS_DIR` invariant under `CONFIG_DIR`, `_ensure_dirs` creates `LOGS_DIR`, save-prunes-by-count, save-below-cap-keeps-everything, save-prunes-by-age, and a backwards-compat assertion that a default `AppConfig` leaves 201 pre-existing files untouched on save. Full unit suite: 763 passed, 11 skipped.
+
 ## [0.13.0-alpha] - 2026-05-01
 
 Aligns the workbench's config dir with FreeCAD 1.1's version-scoped user dirs. Reported by @egandro on issue #9 — users on FreeCAD 1.1+ saw two `FreeCADAI/` trees side-by-side: the live unversioned one at `~/.config/FreeCAD/FreeCADAI/`, plus a stale snapshot inside `~/.config/FreeCAD/v1-1/` that FreeCAD 1.1's own first-launch migration of the legacy `~/.config/FreeCAD/` tree created. Documentation referenced the unversioned path throughout, but FreeCAD's actual version-scoped config layout drifted from where the workbench was writing.

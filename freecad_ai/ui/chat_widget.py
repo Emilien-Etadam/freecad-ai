@@ -32,7 +32,7 @@ Slot = QtCore.Slot
 QFont = QtGui.QFont
 QTextCursor = QtGui.QTextCursor
 
-from ..config import get_config, save_current_config
+from ..config import LOGS_DIR, get_config, prune_oldest_files, save_current_config
 from ..core.conversation import Conversation
 from ..core.executor import extract_code_blocks, execute_code
 from .message_view import (
@@ -1783,10 +1783,9 @@ class ChatDockWidget(QDockWidget):
         import os
         from datetime import datetime
 
-        log_dir = os.path.expanduser("~/.config/FreeCAD/FreeCADAI/logs")
-        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(LOGS_DIR, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filepath = os.path.join(log_dir, f"session_{timestamp}.json")
+        filepath = os.path.join(LOGS_DIR, f"session_{timestamp}.json")
 
         # Build the log from conversation messages
         log_data = {
@@ -1812,6 +1811,14 @@ class ChatDockWidget(QDockWidget):
             with open(filepath, "w") as f:
                 json.dump(log_data, f, indent=2, default=str)
 
+            cfg = get_config()
+            prune_oldest_files(
+                LOGS_DIR,
+                lambda n: n.startswith("session_") and n.endswith(".json"),
+                cfg.max_session_logs,
+                cfg.max_retention_age_days,
+            )
+
             self._append_html(render_message(
                 "system",
                 translate("ChatDockWidget", "Session log saved to: {}").format(filepath)
@@ -1827,10 +1834,9 @@ class ChatDockWidget(QDockWidget):
         import os
         from datetime import datetime
 
-        log_dir = os.path.expanduser("~/.config/FreeCAD/FreeCADAI/logs")
-        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(LOGS_DIR, exist_ok=True)
 
-        filepath = os.path.join(log_dir, "latest_session.json")
+        filepath = os.path.join(LOGS_DIR, "latest_session.json")
 
         log_data = {
             "timestamp": datetime.now().isoformat(),

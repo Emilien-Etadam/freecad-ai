@@ -859,4 +859,138 @@ class TestConfigDirResolution:
             assert (target / _ACTIVE_MARKER_FILE).stat().st_mtime == marker_mtime
 
 
+class TestPruneOldestFiles:
+    def test_prunes_oldest_by_mtime(self, tmp_path):
+        from freecad_ai.config import prune_oldest_files
+
+        for i in range(5):
+            p = tmp_path / f"f{i}.json"
+            p.write_text("{}")
+            os.utime(p, (1000.0 + i, 1000.0 + i))
+        # Mtime order f0 < f1 < f2 < f3 < f4 (newest)
+
+        deleted = prune_oldest_files(str(tmp_path), lambda n: n.endswith(".json"), keep=2)
+        assert deleted == 3
+
+        remaining = sorted(p.name for p in tmp_path.iterdir())
+        assert remaining == ["f3.json", "f4.json"]
+
+    def test_pattern_filter(self, tmp_path):
+        from freecad_ai.config import prune_oldest_files
+
+        for i in range(3):
+            (tmp_path / f"keep-{i}.txt").write_text("x")
+            (tmp_path / f"prune-{i}.json").write_text("{}")
+
+        prune_oldest_files(str(tmp_path), lambda n: n.endswith(".json"), keep=1)
+
+        remaining = sorted(p.name for p in tmp_path.iterdir())
+        # All 3 .txt kept, only newest .json kept.
+        assert "keep-0.txt" in remaining
+        assert "keep-1.txt" in remaining
+        assert "keep-2.txt" in remaining
+        assert sum(1 for n in remaining if n.endswith(".json")) == 1
+
+    def test_below_cap_short_circuits(self, tmp_path):
+        from freecad_ai.config import prune_oldest_files
+
+        for i in range(3):
+            (tmp_path / f"f{i}.json").write_text("{}")
+        deleted = prune_oldest_files(str(tmp_path), lambda n: n.endswith(".json"), keep=10)
+        assert deleted == 0
+        assert len(list(tmp_path.iterdir())) == 3
+
+    def test_missing_directory_is_noop(self, tmp_path):
+        from freecad_ai.config import prune_oldest_files
+        deleted = prune_oldest_files(str(tmp_path / "does-not-exist"), lambda n: True, keep=0)
+        assert deleted == 0
+
+    def test_age_cap_deletes_files_older_than_threshold(self, tmp_path):
+        import time as _time
+
+        from freecad_ai.config import prune_oldest_files
+
+        now = _time.time()
+        # 3 old files (~10 days), 2 recent (~1 day).
+        for i in range(3):
+            p = tmp_path / f"old-{i}.json"
+            p.write_text("{}")
+            old = now - (10 * 86400)
+            os.utime(p, (old, old))
+        for i in range(2):
+            p = tmp_path / f"new-{i}.json"
+            p.write_text("{}")
+            recent = now - (1 * 86400)
+            os.utime(p, (recent, recent))
+
+        # keep=0 disables count cap; only age cap fires.
+        deleted = prune_oldest_files(
+            str(tmp_path), lambda n: n.endswith(".json"), keep=0, max_age_days=7
+        )
+        assert deleted == 3
+        remaining = sorted(p.name for p in tmp_path.iterdir())
+        assert remaining == ["new-0.json", "new-1.json"]
+
+    def test_count_and_age_caps_combine(self, tmp_path):
+        import time as _time
+
+        from freecad_ai.config import prune_oldest_files
+
+        now = _time.time()
+        # 5 files: 2 within both caps, 1 over count, 2 over age.
+        # mtime order (newest → oldest): a, b, c, d, e
+        for name, age_days in [
+            ("a", 0.5),
+            ("b", 1.0),
+            ("c", 2.0),
+            ("d", 10.0),  # over age
+            ("e", 20.0),  # over age
+        ]:
+            p = tmp_path / f"{name}.json"
+            p.write_text("{}")
+            mtime = now - (age_days * 86400)
+            os.utime(p, (mtime, mtime))
+
+        # keep=2 → c, d, e are over count. age=7 → d, e are over age.
+        # Union deleted: c, d, e. Survivors: a, b.
+        deleted = prune_oldest_files(
+            str(tmp_path), lambda n: n.endswith(".json"), keep=2, max_age_days=7
+        )
+        assert deleted == 3
+        remaining = sorted(p.name for p in tmp_path.iterdir())
+        assert remaining == ["a.json", "b.json"]
+
+    def test_zero_caps_disable_pruning(self, tmp_path):
+        from freecad_ai.config import prune_oldest_files
+
+        for i in range(5):
+            (tmp_path / f"f{i}.json").write_text("{}")
+        deleted = prune_oldest_files(
+            str(tmp_path), lambda n: n.endswith(".json"), keep=0, max_age_days=0
+        )
+        assert deleted == 0
+        assert len(list(tmp_path.iterdir())) == 5
+
+
+class TestLogsDir:
+    def test_logs_dir_lives_under_config_dir(self):
+        """Regression: session logs must follow CONFIG_DIR migrations.
+
+        v0.13.0-alpha shipped with hardcoded ~/.config/FreeCAD/FreeCADAI/logs
+        in chat_widget.py — the migration moved the rest of the workbench
+        config but session logs continued writing to the legacy path. Asserting
+        the constant relationship here ensures any future config-dir change
+        carries logs along automatically.
+        """
+        from freecad_ai import config
+
+        assert config.LOGS_DIR == os.path.join(config.CONFIG_DIR, "logs")
+
+    def test_ensure_dirs_creates_logs_dir(self, tmp_config_dir):
+        """_ensure_dirs() must create LOGS_DIR alongside the others."""
+        from freecad_ai import config
+        config._ensure_dirs()
+        assert os.path.isdir(config.LOGS_DIR)
+
+
 import os
