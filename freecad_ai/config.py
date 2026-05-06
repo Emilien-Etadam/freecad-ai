@@ -405,6 +405,12 @@ class AppConfig:
     user_tools_disabled: list = field(default_factory=list)
     scan_freecad_macros: bool = False
     hooks_disabled: list = field(default_factory=list)
+    # When True, hook/user-tool Edit and New buttons open files via the OS
+    # default handler (xdg-open / Launch Services / file association). When
+    # False (default), they open in FreeCAD's docked Gui::PythonEditor — which
+    # requires closing the modal Settings dialog first since the editor is
+    # an MDI sub-window of the main window.
+    use_external_editor: bool = False
     system_prompt_override: str = ""  # empty = use default; non-empty = use as-is
     vision_detected: bool | None = None   # None=not tested, True/False=probe result
     vision_override: bool | None = None   # user manual override, takes precedence

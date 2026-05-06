@@ -637,6 +637,23 @@ class SettingsDialog(QDialog):
         mcp_group.setLayout(mcp_layout)
         layout.addWidget(mcp_group)
 
+        # Editor group — affects Edit/New buttons in User Tools and Hooks below.
+        editor_group = QGroupBox(translate("SettingsDialog", "Editor"))
+        editor_layout = QVBoxLayout()
+        self.use_external_editor_cb = QCheckBox(translate(
+            "SettingsDialog",
+            "Open hooks and user tools in the OS-default editor "
+            "(instead of FreeCAD's docked script editor)"))
+        self.use_external_editor_cb.setToolTip(translate(
+            "SettingsDialog",
+            "When enabled, files open via the OS file association "
+            "(xdg-open / Launch Services) so the Settings dialog can stay open. "
+            "When disabled, files open in FreeCAD's docked Gui::PythonEditor — "
+            "which requires closing this dialog first."))
+        editor_layout.addWidget(self.use_external_editor_cb)
+        editor_group.setLayout(editor_layout)
+        layout.addWidget(editor_group)
+
         # User Tools group
         user_tools_group = QGroupBox(translate("SettingsDialog", "User Tools"))
         user_tools_layout = QVBoxLayout()
@@ -646,9 +663,17 @@ class SettingsDialog(QDialog):
         user_tools_layout.addWidget(self.user_tools_list)
 
         ut_btn_layout = QHBoxLayout()
+        ut_new_btn = QPushButton(translate("SettingsDialog", "New..."))
+        ut_new_btn.clicked.connect(self._new_user_tool)
+        ut_btn_layout.addWidget(ut_new_btn)
+
         ut_add_btn = QPushButton(translate("SettingsDialog", "Add..."))
         ut_add_btn.clicked.connect(self._add_user_tool)
         ut_btn_layout.addWidget(ut_add_btn)
+
+        ut_edit_btn = QPushButton(translate("SettingsDialog", "Edit..."))
+        ut_edit_btn.clicked.connect(self._edit_user_tool)
+        ut_btn_layout.addWidget(ut_edit_btn)
 
         ut_remove_btn = QPushButton(translate("SettingsDialog", "Remove"))
         ut_remove_btn.clicked.connect(self._remove_user_tool)
@@ -704,6 +729,10 @@ class SettingsDialog(QDialog):
         hooks_layout.addWidget(self.hooks_list)
 
         hooks_btn_layout = QHBoxLayout()
+        hooks_new_btn = QPushButton(translate("SettingsDialog", "New..."))
+        hooks_new_btn.clicked.connect(self._new_hook)
+        hooks_btn_layout.addWidget(hooks_new_btn)
+
         hooks_add_btn = QPushButton(translate("SettingsDialog", "Add..."))
         hooks_add_btn.clicked.connect(self._add_hook)
         hooks_btn_layout.addWidget(hooks_add_btn)
@@ -831,6 +860,9 @@ class SettingsDialog(QDialog):
         self._mcp_configs = list(cfg.mcp_servers)
         for entry in self._mcp_configs:
             self.mcp_list.addItem(self._mcp_list_label(entry))
+
+        # Editor preference
+        self.use_external_editor_cb.setChecked(cfg.use_external_editor)
 
         # User tools
         self.scan_macros_cb.setChecked(cfg.scan_freecad_macros)
@@ -1059,6 +1091,7 @@ class SettingsDialog(QDialog):
             cfg.thinking_detected = None
 
         cfg.mcp_servers = list(self._mcp_configs) if hasattr(self, "_mcp_configs") else []
+        cfg.use_external_editor = self.use_external_editor_cb.isChecked()
         cfg.scan_freecad_macros = self.scan_macros_cb.isChecked()
 
         # Tool reranking
@@ -1497,6 +1530,57 @@ class SettingsDialog(QDialog):
         shutil.copy2(path, dest)
         self._reload_user_tools()
 
+    def _edit_user_tool(self):
+        """Open the selected user tool file in the configured editor."""
+        from ..config import USER_TOOLS_DIR
+
+        row = self.user_tools_list.currentRow()
+        if row < 0 or row >= len(self._user_tool_files):
+            return
+        fpath = os.path.join(USER_TOOLS_DIR, self._user_tool_files[row])
+        if not os.path.isfile(fpath):
+            return
+        if not self._prepare_editor_open():
+            return
+        self._open_path(fpath)
+
+    def _new_user_tool(self):
+        """Create a new user tool from a template and open it in the configured editor."""
+        from ..config import USER_TOOLS_DIR
+        from ..extensions.file_templates import render_user_tool_template
+
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, translate("SettingsDialog", "New User Tool"),
+            translate("SettingsDialog",
+                      "Enter a function name (used as filename and function name):"))
+        if not ok or not name.strip():
+            return
+        name = name.strip().lower().replace(" ", "_").replace("-", "_")
+        if not name.isidentifier():
+            QMessageBox.warning(
+                self,
+                translate("SettingsDialog", "Invalid Name"),
+                translate("SettingsDialog",
+                          "Name must be a valid Python identifier (letters, digits, underscore)."))
+            return
+        fpath = os.path.join(USER_TOOLS_DIR, f"{name}.py")
+        if os.path.exists(fpath):
+            QMessageBox.warning(
+                self,
+                translate("SettingsDialog", "File Exists"),
+                f"'{name}.py' " + translate(
+                    "SettingsDialog", "already exists in tools directory."))
+            return
+        if not self._prepare_editor_open():
+            return
+        os.makedirs(USER_TOOLS_DIR, exist_ok=True)
+        with open(fpath, "w") as f:
+            f.write(render_user_tool_template(name))
+        if get_config().use_external_editor:
+            # Dialog stayed open; refresh the list so the new tool appears.
+            self._reload_user_tools()
+        self._open_path(fpath)
+
     def _remove_user_tool(self):
         """Remove selected tool file from user tools dir."""
         from ..config import USER_TOOLS_DIR
@@ -1594,8 +1678,103 @@ class SettingsDialog(QDialog):
         shutil.copy2(path, os.path.join(hook_dir, "hook.py"))
         self._reload_hooks()
 
+    def _new_hook(self):
+        """Create a new hook from a template and open it in the configured editor."""
+        from ..config import HOOKS_DIR
+        from ..extensions.file_templates import render_hook_template
+
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, translate("SettingsDialog", "New Hook"),
+            translate("SettingsDialog", "Enter a name for this hook:"))
+        if not ok or not name.strip():
+            return
+        name = name.strip().lower().replace(" ", "-")
+        hook_dir = os.path.join(HOOKS_DIR, name)
+        hook_file = os.path.join(hook_dir, "hook.py")
+        if os.path.exists(hook_file):
+            QMessageBox.warning(
+                self,
+                translate("SettingsDialog", "Hook Exists"),
+                translate("SettingsDialog", "A hook named '") + name + translate(
+                    "SettingsDialog", "' already exists."))
+            return
+        if not self._prepare_editor_open():
+            return
+        os.makedirs(hook_dir, exist_ok=True)
+        with open(hook_file, "w") as f:
+            f.write(render_hook_template(name))
+        if get_config().use_external_editor:
+            # Dialog stayed open; refresh the list so the new hook appears.
+            self._reload_hooks()
+        self._open_path(hook_file)
+
+    def _open_in_freecad_editor(self, path):
+        """Open a .py/.FCMacro file in FreeCAD's built-in script editor.
+
+        Falls back to the OS-default handler via QDesktopServices if FreeCADGui
+        isn't available or rejects the file.
+        """
+        try:
+            import FreeCADGui as Gui
+            Gui.open(path)
+            return
+        except Exception:
+            pass
+        url = QtCore.QUrl.fromLocalFile(path)
+        QtGui.QDesktopServices.openUrl(url)
+
+    def _open_in_external_editor(self, path):
+        """Open a path using the OS-default handler (xdg-open / file association)."""
+        url = QtCore.QUrl.fromLocalFile(path)
+        QtGui.QDesktopServices.openUrl(url)
+
+    def _prepare_editor_open(self) -> bool:
+        """Prepare to open a file in the user's preferred editor.
+
+        Returns True if the slot may proceed (write file, then call _open_path),
+        False if the user cancelled. For the FreeCAD editor this prompts to
+        save/discard the dialog state since the docked editor is unreachable
+        while the modal is up. For external editors this is a no-op.
+        """
+        cfg = get_config()
+        if cfg.use_external_editor:
+            return True
+        return self._confirm_close_for_editor()
+
+    def _open_path(self, path):
+        """Dispatch to FreeCAD or external editor based on the config flag."""
+        cfg = get_config()
+        if cfg.use_external_editor:
+            self._open_in_external_editor(path)
+        else:
+            self._open_in_freecad_editor(path)
+
+    def _confirm_close_for_editor(self) -> bool:
+        """Prompt to close this modal dialog so the docked editor is reachable.
+
+        Returns True if the dialog was closed (caller may proceed), False if
+        the user cancelled.
+        """
+        choice = QMessageBox.question(
+            self,
+            translate("SettingsDialog", "Open Script Editor"),
+            translate(
+                "SettingsDialog",
+                "FreeCAD's script editor is docked behind this dialog. "
+                "The dialog must close so you can reach it.\n\n"
+                "Save your pending settings changes first?"),
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save)
+        if choice == QMessageBox.Save:
+            self._save()
+            return True
+        if choice == QMessageBox.Discard:
+            self.reject()
+            return True
+        return False
+
     def _edit_hook(self):
-        """Open the selected hook's hook.py in the default editor."""
+        """Open the selected hook's hook.py in the configured editor."""
         row = self.hooks_list.currentRow()
         if row < 0:
             return
@@ -1605,10 +1784,11 @@ class SettingsDialog(QDialog):
             if row >= len(hooks):
                 return
             hook_path = os.path.join(hooks[row]["path"], "hook.py")
-            url = QtCore.QUrl.fromLocalFile(hook_path)
-            QtGui.QDesktopServices.openUrl(url)
         except Exception:
-            pass
+            return
+        if not self._prepare_editor_open():
+            return
+        self._open_path(hook_path)
 
     def _remove_hook(self):
         """Remove the selected hook directory."""
