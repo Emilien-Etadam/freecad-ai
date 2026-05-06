@@ -1576,7 +1576,7 @@ class SettingsDialog(QDialog):
         os.makedirs(USER_TOOLS_DIR, exist_ok=True)
         with open(fpath, "w") as f:
             f.write(render_user_tool_template(name))
-        if get_config().use_external_editor:
+        if self._use_external_editor_now():
             # Dialog stayed open; refresh the list so the new tool appears.
             self._reload_user_tools()
         self._open_path(fpath)
@@ -1703,7 +1703,7 @@ class SettingsDialog(QDialog):
         os.makedirs(hook_dir, exist_ok=True)
         with open(hook_file, "w") as f:
             f.write(render_hook_template(name))
-        if get_config().use_external_editor:
+        if self._use_external_editor_now():
             # Dialog stayed open; refresh the list so the new hook appears.
             self._reload_hooks()
         self._open_path(hook_file)
@@ -1728,6 +1728,14 @@ class SettingsDialog(QDialog):
         url = QtCore.QUrl.fromLocalFile(path)
         QtGui.QDesktopServices.openUrl(url)
 
+    def _use_external_editor_now(self) -> bool:
+        """Live checkbox state — governs the current New/Edit action regardless
+        of whether the user later Saves or Discards the dialog. Reading from
+        the widget (not get_config()) means an in-session toggle takes effect
+        immediately, matching what the user just clicked.
+        """
+        return self.use_external_editor_cb.isChecked()
+
     def _prepare_editor_open(self) -> bool:
         """Prepare to open a file in the user's preferred editor.
 
@@ -1736,15 +1744,13 @@ class SettingsDialog(QDialog):
         save/discard the dialog state since the docked editor is unreachable
         while the modal is up. For external editors this is a no-op.
         """
-        cfg = get_config()
-        if cfg.use_external_editor:
+        if self._use_external_editor_now():
             return True
         return self._confirm_close_for_editor()
 
     def _open_path(self, path):
-        """Dispatch to FreeCAD or external editor based on the config flag."""
-        cfg = get_config()
-        if cfg.use_external_editor:
+        """Dispatch to FreeCAD or external editor based on the live checkbox."""
+        if self._use_external_editor_now():
             self._open_in_external_editor(path)
         else:
             self._open_in_freecad_editor(path)
