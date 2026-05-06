@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.14.0-alpha] - 2026-05-06
+
+Authoring hooks and user tools is now a first-class flow inside Settings: **New…** writes a starter template and opens it for editing, **Edit…** opens the selected file. A new "Editor" preference routes file edits through either FreeCAD's docked Python editor (default) or the user's OS-default editor — keeping with the workbench's principle of not constraining users to its choice of tools.
+
+### Added
+
+- **New… button on Hooks and User Tools panels** in `freecad_ai/ui/settings_dialog.py`. Prompts for a name (kebab-case dir for hooks, snake_case identifier for user tools), writes a starter template, opens the file in the configured editor. Templates live in `freecad_ai/extensions/file_templates.py`:
+  - **Hook template** is registry-sourced from `freecad_ai/hooks/registry.VALID_EVENTS` — one `on_<event>(context)` stub per valid event, so adding a new event in the registry automatically extends the template with no manual sync.
+  - **User-tool template** ships a typed example function with a docstring — passes `validate_file()` clean (no warnings) the moment the user saves it.
+- **Edit… button on both panels** — opens the selected hook's `hook.py` or the selected user-tool file in the configured editor.
+- **Editor preference** — `AppConfig.use_external_editor: bool = False`. New "Editor" group in Settings with a single checkbox: *"Open hooks and user tools in the OS-default editor (instead of FreeCAD's docked script editor)"*. Defaults off (FreeCAD editor); opt in for vim/VS Code/etc. workflows. Read live from the checkbox at routing time, so toggling and clicking New/Edit applies immediately even if the dialog is later cancelled (no save required for the toggle to take effect for the current action).
+
+### Behavior
+
+- **FreeCAD editor path** (default): clicking New/Edit prompts **Save / Discard / Cancel** because `Gui::PythonEditor` is an MDI sub-window of `MainWindow` and is unreachable while a modal dialog is up. Save and Discard both close the Settings dialog before opening the file; Cancel keeps the dialog open and aborts the action (no debris — for New, the file isn't written until after the prompt is confirmed).
+- **External editor path**: opens via `QtGui.QDesktopServices.openUrl()` — no prompt, Settings dialog stays open, the list refreshes to show the new entry.
+
+### Tests
+
+- 10 new tests in `tests/unit/test_file_templates.py`: hook template parses, contains exactly one handler per `VALID_EVENTS` entry (in both directions — no missing, no extras), includes the hook name in its docstring; user-tool template parses, passes `validate_file()` with zero warnings, the function name matches the input. Plus `AppConfig.use_external_editor` default-is-False, JSON save/load roundtrip, and a backwards-compat assertion that older configs without the field load with the default.
+
 ## [0.13.1-alpha] - 2026-05-01
 
 Patch release. Fixes a v0.13.0-alpha follow-up: session logs were still writing to the legacy hardcoded path after the migration. Adds bounded retention so `<FreeCADAI dir>/conversations/` and `<FreeCADAI dir>/logs/` no longer grow without limit.
