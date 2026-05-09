@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.14.2-alpha] - 2026-05-09
+
+A small UI patch: the chat panel painted dark even with FreeCAD set to a light theme.
+
+### Fixed
+
+- **Theme detector at `freecad_ai/ui/message_view.py:_is_dark_mode`** read `QTreeView.palette().color(Base)` before consulting FreeCAD's `Theme` preference. On Linux when the host Qt theme is dark, the palette reports dark Base even though FreeCAD's QSS stylesheet renders the workbench as light — so the chat input, MCP status banner, and message view painted dark while the rest of the FreeCAD window painted light. Reordered to name-first: trust the user's selected `Theme` ("light"/"classic"/"default" → light, "dark" → dark) and only fall back to palette introspection when the name is empty/custom. Adds 13 parametrized regression tests in `tests/unit/test_theme_detection.py`.
+
 ## [0.14.1-alpha] - 2026-05-09
 
 A targeted patch driven by [issue #10](https://github.com/ghbalf/freecad-ai/issues/10): users picking the GitHub provider hit a confusing 400 in Act mode because (a) GitHub Models' per-request input cap is much smaller than the model's native context, and (b) two built-in tool schemas were rejected by GitHub's strict JSON Schema validation. Both are now fixed, and the github provider preset ships a sensible reranker default so first-time users don't have to debug their way to it.
