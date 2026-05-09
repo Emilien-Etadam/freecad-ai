@@ -135,31 +135,46 @@ def get_freecad_mode_name(force_refresh: bool = False) -> str:
     return _CACHED_THEME_NAME
 
 
+_LIGHT_THEME_HINTS = ("light", "classic", "default")
+_DARK_THEME_HINTS = ("dark",)
+
+
 def _is_dark_mode(theme_name: str) -> bool:
     """Return True when FreeCAD is using a dark color scheme.
 
-    FreeCAD applies themes via its internal style engine rather than
-    QPalette or QSS stylesheets, and only fully applies a theme change
-    on restart. We probe the effective background color of a real widget
-    (the main window's tree view) since the application-level palette
-    is unreliable.
+    The user's `Theme` preference (from preference packs like
+    "FreeCAD Light", "FreeCAD Dark", "OpenLight", "OpenDark") is the
+    most reliable signal: it reflects the choice the user made, and
+    won't be misled by Qt palette quirks.
 
+    Why we don't lead with the palette: FreeCAD 1.1+ applies themes
+    via QSS stylesheets, which override visual appearance but do NOT
+    update QPalette on Linux when the system Qt theme is dark. A
+    "FreeCAD Light" workbench on a KDE-dark host renders light but
+    `widget.palette().color(Base)` still reports dark — the previous
+    palette-first logic flipped to dark mode incorrectly.
+
+    Palette probing remains as a fallback for the unnamed/custom case.
     Note: switching themes mid-session requires restarting FreeCAD.
     """
+    name = (theme_name or "").strip().lower()
+    if any(hint in name for hint in _DARK_THEME_HINTS):
+        return True
+    if any(hint in name for hint in _LIGHT_THEME_HINTS):
+        return False
+    # No name match — fall back to palette introspection.
     try:
         import FreeCADGui as Gui
         from .compat import QtWidgets, QtGui
         mw = Gui.getMainWindow()
         if mw:
-            # Tree views reliably reflect the theme's actual colors
             trees = mw.findChildren(QtWidgets.QTreeView)
             if trees:
                 bg = trees[0].palette().color(QtGui.QPalette.Base)
                 return bg.lightness() < 128
     except Exception:
         pass
-    # Fallback to theme name
-    return "dark" in (theme_name or "").strip().lower()
+    return False
 
 
 def _colors_for_theme(theme_name: str) -> dict:
