@@ -4521,7 +4521,7 @@ CREATE_ASSEMBLY = ToolDefinition(
                   required=False, default="Assembly"),
         ToolParam("part_names", "array",
                   "List of body/part names to add to the assembly",
-                  required=False),
+                  required=False, items={"type": "string"}),
         ToolParam("ground_first", "boolean",
                   "Ground (fix in place) the first part as reference frame (default: true)",
                   required=False, default=True),
@@ -4719,7 +4719,7 @@ ADD_PART_TO_ASSEMBLY = ToolDefinition(
         ToolParam("part_name", "string", "Name of the body/part to add"),
         ToolParam("position", "array",
                   "Optional [x, y, z] position for the part",
-                  required=False),
+                  required=False, items={"type": "number"}),
     ],
     handler=_handle_add_part_to_assembly,
 )

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`create_assembly` and `add_part_to_assembly` tool schemas** declared `array`-typed parameters (`part_names`, `position`) without an `items` keyword. Anthropic and Ollama silently accept this; OpenAI's marketplace API (GitHub Models) enforces the JSON Schema spec and rejects the request with `invalid_function_parameters`. Surfaced by [issue #10](https://github.com/ghbalf/freecad-ai/issues/10) once the keyword reranker reduced the prompt enough to clear the input-size cap. Added a regression test in `tests/unit/test_registry.py` that walks every built-in tool and asserts no array property is missing `items`, so future tool additions can't reintroduce the same class of bug.
+
 ## [0.14.0-alpha] - 2026-05-06
 
 Authoring hooks and user tools is now a first-class flow inside Settings: **New…** writes a starter template and opens it for editing, **Edit…** opens the selected file. A new "Editor" preference routes file edits through either FreeCAD's docked Python editor (default) or the user's OS-default editor — keeping with the workbench's principle of not constraining users to its choice of tools.

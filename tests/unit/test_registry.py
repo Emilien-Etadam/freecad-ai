@@ -217,3 +217,27 @@ class TestMCPSchema:
     def test_empty_registry(self):
         reg = ToolRegistry()
         assert reg.to_mcp_schema() == []
+
+
+class TestBuiltinToolSchemas:
+    """Validate that every shipped tool emits a strict-OpenAI-compliant schema.
+
+    Issue #10: GitHub Models rejected create_assembly because part_names was
+    declared as 'array' without 'items'. Anthropic and Ollama silently accept
+    this; OpenAI's marketplace API enforces the spec. Walk every built-in tool
+    so future regressions surface immediately, not from a user bug report.
+    """
+
+    def test_every_array_property_has_items(self):
+        from freecad_ai.tools.freecad_tools import ALL_TOOLS
+
+        offenders = []
+        for tool in ALL_TOOLS:
+            schema = _params_to_json_schema(tool.parameters)
+            for prop_name, prop in schema.get("properties", {}).items():
+                if prop.get("type") == "array" and "items" not in prop:
+                    offenders.append(f"{tool.name}.{prop_name}")
+        assert not offenders, (
+            "Array-typed properties without 'items' (rejected by strict "
+            f"providers like GitHub Models): {offenders}"
+        )
