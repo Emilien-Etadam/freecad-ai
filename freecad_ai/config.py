@@ -363,6 +363,7 @@ PROVIDER_PRESETS = {
         "base_url": p["base_url"],
         "default_model": p["default_model"],
         "default_params": p.get("default_params", {}),
+        "default_rerank": p.get("default_rerank", {}),
     }
     for name, p in _PROVIDERS.items()
 }

@@ -892,6 +892,32 @@ class SettingsDialog(QDialog):
             cfg = get_config()
             self._load_model_params_table(model, cfg)
 
+            # Apply provider-recommended reranker settings only when the
+            # reranker UI is still at its factory default (off + top_n 15).
+            # This way an explicit user choice — even "off" — survives a
+            # provider switch (the rerank state in the dialog moves only
+            # when it currently looks untouched). Used by the github preset
+            # to enable keyword/top_n=8 by default; see issue #10.
+            rerank_defaults = preset.get("default_rerank", {})
+            if rerank_defaults and self._rerank_at_factory_defaults():
+                self._apply_rerank_defaults(rerank_defaults)
+
+    def _rerank_at_factory_defaults(self) -> bool:
+        """True if the rerank UI matches AppConfig's factory defaults."""
+        return (self.rerank_method_combo.currentIndex() == 0
+                and self.rerank_top_n_spin.value() == 15)
+
+    _RERANK_METHOD_INDEX = {"off": 0, "keyword": 1, "llm": 2}
+
+    def _apply_rerank_defaults(self, defaults: dict):
+        """Push a preset's recommended reranker settings into the UI."""
+        method = defaults.get("method")
+        if method in self._RERANK_METHOD_INDEX:
+            self.rerank_method_combo.setCurrentIndex(
+                self._RERANK_METHOD_INDEX[method])
+        if "top_n" in defaults:
+            self.rerank_top_n_spin.setValue(int(defaults["top_n"]))
+
     # ── Model Parameters table helpers ─────────────────────────
 
     # ── Strip Thinking History helpers ─────────────────────────

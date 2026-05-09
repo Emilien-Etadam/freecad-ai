@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub provider preset now ships a recommended reranker default** (`{"method": "keyword", "top_n": 8}`). GitHub Models enforces a small per-request input cap independent of the underlying model's native context window — with ~50 built-in tool schemas attached, a fresh Act-mode turn overshoots it before the user types anything (see [issue #10](https://github.com/ghbalf/freecad-ai/issues/10)). The Settings dialog applies this on provider switch only when the reranker UI is still at its factory default (off + top_n=15), so an explicit user choice — even "off" — is never silently overwritten. Done via a new `default_rerank` field on the provider preset that mirrors the existing `default_params` pattern; other providers don't ship a recommendation today (anthropic and openai-direct have generous per-request budgets, and the right `top_n` is workload-dependent elsewhere).
+
 ### Fixed
 
 - **`create_assembly` and `add_part_to_assembly` tool schemas** declared `array`-typed parameters (`part_names`, `position`) without an `items` keyword. Anthropic and Ollama silently accept this; OpenAI's marketplace API (GitHub Models) enforces the JSON Schema spec and rejects the request with `invalid_function_parameters`. Surfaced by [issue #10](https://github.com/ghbalf/freecad-ai/issues/10) once the keyword reranker reduced the prompt enough to clear the input-size cap. Added a regression test in `tests/unit/test_registry.py` that walks every built-in tool and asserts no array property is missing `items`, so future tool additions can't reintroduce the same class of bug.

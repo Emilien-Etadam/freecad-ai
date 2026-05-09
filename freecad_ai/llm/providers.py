@@ -121,6 +121,16 @@ PROVIDERS = {
         "default_model": "gpt-4o",
         "api_style": "openai",
         "supports_tools": True,
+        # GitHub Models (the marketplace API at models.inference.ai.azure.com,
+        # distinct from a Copilot subscription) enforces a small per-request
+        # input cap independent of the underlying model's native context
+        # window. With ~50 built-in tool schemas attached, a fresh Act-mode
+        # turn overshoots the cap before the user types anything. The keyword
+        # reranker @ top_n≈8 keeps the request under the cap. See issue #10.
+        # The Settings dialog applies this on provider switch only when the
+        # reranker is still at its factory default (off, top_n=15) so an
+        # explicit user choice is never silently overwritten.
+        "default_rerank": {"method": "keyword", "top_n": 8},
     },
     "huggingface": {
         "base_url": "https://api-inference.huggingface.co/v1",

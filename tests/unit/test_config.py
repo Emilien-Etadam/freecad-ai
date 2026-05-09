@@ -133,6 +133,32 @@ class TestProviderPresets:
         # PROVIDER_PRESETS should have exactly the same keys as PROVIDERS
         assert set(PROVIDER_PRESETS.keys()) == set(PROVIDERS.keys())
 
+    def test_github_preset_recommends_reranker(self):
+        """Issue #10: GitHub Models has a small per-request input cap.
+
+        The keyword reranker @ top_n=8 keeps Act-mode tool-call requests
+        under that cap. The Settings dialog applies this on provider
+        switch only when the reranker UI is still at factory defaults
+        (so an explicit user choice is never overwritten).
+        """
+        gh = PROVIDER_PRESETS["github"]
+        assert gh["default_rerank"] == {"method": "keyword", "top_n": 8}
+
+    def test_default_rerank_is_empty_for_other_providers(self):
+        """Only the github preset ships a reranker recommendation today.
+
+        Other providers either have generous per-request limits (anthropic,
+        openai-direct) or the right top_n is workload-dependent. Adding a
+        recommendation elsewhere is intentional, not boilerplate.
+        """
+        for name, preset in PROVIDER_PRESETS.items():
+            if name == "github":
+                continue
+            assert preset["default_rerank"] == {}, (
+                f"{name} unexpectedly carries default_rerank — "
+                f"add a justifying test or remove the preset entry."
+            )
+
 
 class TestSaveLoad:
     def test_save_and_load(self, tmp_config_dir):
