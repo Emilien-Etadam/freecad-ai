@@ -38,6 +38,7 @@ from ..core.executor import extract_code_blocks, execute_code
 from .message_view import (
     _get_theme_colors,
     get_chat_display_stylesheet,
+    get_freecad_mode_name,
     refresh_theme_cache,
     render_message,
     render_code_block,
@@ -66,6 +67,8 @@ _BINARY_MAGIC = (
     b"\x00asm",        # WebAssembly
 )
 
+# set of themes that brakes ui buttons text
+_STYLESHEET_CONFLICT_THEMES = frozenset({"opendark", "openlight"})
 
 def _is_binary_content(data: bytes) -> bool:
     """Detect binary content by magic bytes and null-byte presence."""
@@ -1056,6 +1059,14 @@ class ChatDockWidget(QDockWidget):
         save_log_btn.clicked.connect(self._save_session_log)
         footer.addWidget(save_log_btn)
 
+        self._theme_ui_conflict_buttons = [
+            self._capture_btn,
+            settings_btn,
+            new_chat_btn,
+            load_chat_btn,
+            save_log_btn,
+        ]
+
         footer.addStretch()
 
         self.token_label = QLabel(translate("ChatDockWidget", "tokens: ~0"))
@@ -1074,9 +1085,21 @@ class ChatDockWidget(QDockWidget):
         refresh_theme_cache()
         self._apply_theme()
 
+    def _resolve_stylesheet_conflict(self, theme_name:str):
+        """OpenDark/OpenLight theme packs inject global QPushButton styles that
+        override padding/margins, causing button text to be clipped.
+        Re-applying explicit padding via setStyleSheet restores correct sizing.
+        """
+        if theme_name.casefold() in _STYLESHEET_CONFLICT_THEMES:
+            for btn in self._theme_ui_conflict_buttons:
+                btn.setMaximumWidth(100)
+                btn.setStyleSheet("QPushButton { padding: 4px 16px; margin: 1px;}")
+
     def _apply_theme(self):
         """Reapply all theme-dependent stylesheets."""
         colors = _get_theme_colors()
+        theme_name = get_freecad_mode_name(force_refresh=True)
+        self._resolve_stylesheet_conflict(theme_name)
         self.chat_display.setStyleSheet(get_chat_display_stylesheet())
         self.input_edit.setStyleSheet(
             f"QTextEdit {{ background-color: {colors['chat_bg']}; color: {colors['chat_text']}; "
