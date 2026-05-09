@@ -38,6 +38,7 @@ from ..core.executor import extract_code_blocks, execute_code
 from .message_view import (
     _get_theme_colors,
     get_chat_display_stylesheet,
+    get_freecad_mode_name,
     refresh_theme_cache,
     render_message,
     render_code_block,
@@ -65,6 +66,17 @@ _BINARY_MAGIC = (
     b"\x00\x00\x01\x00",  # ICO
     b"\x00asm",        # WebAssembly
 )
+
+# Themes that ship a global QPushButton stylesheet which overrides
+# padding/margins and clips the labels of buttons in this dock.
+_STYLESHEET_CONFLICT_THEMES = frozenset({"opendark", "openlight"})
+
+# Color rules per viewport-capture mode (applied to _capture_btn).
+_CAPTURE_MODE_COLORS = {
+    "off": "",
+    "every_message": "font-weight: bold; color: #4fc3f7;",  # light blue
+    "after_changes": "font-weight: bold; color: #aed581;",  # light green
+}
 
 
 def _is_binary_content(data: bytes) -> bool:
@@ -1056,6 +1068,16 @@ class ChatDockWidget(QDockWidget):
         save_log_btn.clicked.connect(self._save_session_log)
         footer.addWidget(save_log_btn)
 
+        # _capture_btn is intentionally excluded — its stylesheet is
+        # composed in _capture_btn_stylesheet() so that mode color and
+        # conflict-busting padding share a single setStyleSheet call.
+        self._theme_ui_conflict_buttons = [
+            settings_btn,
+            new_chat_btn,
+            load_chat_btn,
+            save_log_btn,
+        ]
+
         footer.addStretch()
 
         self.token_label = QLabel(translate("ChatDockWidget", "tokens: ~0"))
@@ -1074,9 +1096,50 @@ class ChatDockWidget(QDockWidget):
         refresh_theme_cache()
         self._apply_theme()
 
+    def _resolve_stylesheet_conflict(self, theme_name: str):
+        """OpenDark/OpenLight theme packs inject global QPushButton styles that
+        override padding/margins, causing button text to be clipped.
+        Re-applying explicit padding via setStyleSheet restores correct sizing.
+        Each button keeps its construction-time setMaximumWidth(); only the
+        padding stylesheet is reapplied here.
+        """
+        if theme_name.casefold() in _STYLESHEET_CONFLICT_THEMES:
+            for btn in self._theme_ui_conflict_buttons:
+                btn.setStyleSheet(
+                    "QPushButton { padding: 4px 16px; margin: 1px; }"
+                )
+
+    def _capture_btn_stylesheet(self) -> str:
+        """Build the _capture_btn stylesheet by composing capture-mode
+        color and (under conflicting themes) explicit padding.
+
+        Both rule sets are applied via a single setStyleSheet call so
+        that capture-mode cycling and theme refresh can never overwrite
+        each other's contribution.
+        """
+        mode = (
+            getattr(self, "_capture_mode_override", None)
+            or get_config().viewport_capture
+        )
+        color = _CAPTURE_MODE_COLORS.get(mode, "")
+        needs_padding = (
+            get_freecad_mode_name().casefold() in _STYLESHEET_CONFLICT_THEMES
+        )
+        if not color and not needs_padding:
+            return ""
+        rules = []
+        if needs_padding:
+            rules.append("padding: 4px 16px; margin: 1px;")
+        if color:
+            rules.append(color)
+        return "QPushButton { " + " ".join(rules) + " }"
+
     def _apply_theme(self):
         """Reapply all theme-dependent stylesheets."""
         colors = _get_theme_colors()
+        theme_name = get_freecad_mode_name(force_refresh=True)
+        self._resolve_stylesheet_conflict(theme_name)
+        self._capture_btn.setStyleSheet(self._capture_btn_stylesheet())
         self.chat_display.setStyleSheet(get_chat_display_stylesheet())
         self.input_edit.setStyleSheet(
             f"QTextEdit {{ background-color: {colors['chat_bg']}; color: {colors['chat_text']}; "
@@ -1384,13 +1447,9 @@ class ChatDockWidget(QDockWidget):
         next_mode = modes[(idx + 1) % len(modes)]
         self._capture_mode_override = next_mode
         self._capture_btn.setToolTip(labels.get(next_mode, next_mode))
-        # Visual feedback: distinct colors per active mode
-        style_map = {
-            "off": "",
-            "every_message": "font-weight: bold; color: #4fc3f7;",  # light blue
-            "after_changes": "font-weight: bold; color: #aed581;",  # light green
-        }
-        self._capture_btn.setStyleSheet(style_map.get(next_mode, ""))
+        # Visual feedback: distinct colors per active mode (composed with
+        # conflict-theme padding via _capture_btn_stylesheet()).
+        self._capture_btn.setStyleSheet(self._capture_btn_stylesheet())
 
     def _on_mode_changed(self, index):
         """Update config when mode is toggled."""
