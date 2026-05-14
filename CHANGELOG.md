@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.14.3-alpha] - 2026-05-15
+
+A small but data-preserving patch driven by [issue #12](https://github.com/ghbalf/freecad-ai/issues/12): users on the **Custom** LLM provider lost their gateway URL and model on every FreeCAD restart, with the provider selector reverting to "anthropic" while the custom-provider field values stayed visible.
+
+### Fixed
+
+- **Custom-provider persistence across restart** (`freecad_ai/config.py:_write_to_param_store`). The FreeCAD `ParamGet` mirror only encodes the 11 providers that appear in the Edit → Preferences dropdown — `custom`, `github`, `huggingface`, and `zhipu` are not in that list. Previously, saving a non-prefs provider left the previous `ProviderIndex` (typically `0` = anthropic) in the param store, which then shadowed the JSON's correct `provider.name` on the next `load_config()`. The fix clears the stale index via `group.RemInt("ProviderIndex")` when the current provider isn't representable in the combo, so the load path falls back to the JSON value. Round-trip is now symmetric.
+- **Settings dialog wiped custom-provider fields on switch** (`freecad_ai/ui/settings_dialog.py:_on_provider_changed`). The "custom" preset ships empty `base_url` and `default_model`, and the dialog was applying them unconditionally — switching the combo to "custom" instantly cleared any gateway URL or model name the user had typed. Now `setText` is skipped when the preset value is empty, so switching to "custom" preserves whatever's in the form. Real providers always have non-empty preset values, so their behavior is unchanged.
+
+### Tests
+
+- 3 new tests in `tests/unit/test_config.py::TestParamStoreBridge` covering (a) save-then-reload of a non-prefs provider with a stale `ProviderIndex` in the param store, (b) the same guarantee parametrized across every provider in `PROVIDERS` but absent from `_PARAM_PROVIDERS`, and (c) a drift guard that fails if `_PARAM_PROVIDERS` ever names a provider not registered in `providers.py`. The `FakeGroup` fixture gained `RemInt`/`RemString`/`RemBool` to mirror real `ParamGet` semantics.
+- 3 new tests in `tests/unit/test_settings_dialog_provider_change.py` exercising `_on_provider_changed` via the unbound-method-with-fake-self pattern: switching to "custom" preserves fields, switching to a real provider applies preset values, out-of-range index is a no-op.
+
 ## [0.14.2-alpha] - 2026-05-09
 
 A small UI patch: the chat panel painted dark even with FreeCAD set to a light theme.

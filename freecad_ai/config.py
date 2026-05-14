@@ -612,6 +612,15 @@ def _write_to_param_store(cfg: AppConfig) -> None:
         return
     if cfg.provider.name in _PARAM_PROVIDERS:
         group.SetInt("ProviderIndex", _PARAM_PROVIDERS.index(cfg.provider.name))
+    else:
+        # Provider isn't representable in the prefs combo (e.g. "custom",
+        # "github", "huggingface", "zhipu"). Clear any stale index left
+        # over from a previous prefs-page interaction so the load path
+        # doesn't shadow the JSON name with a wrong provider. See #12.
+        try:
+            group.RemInt("ProviderIndex")
+        except (AttributeError, RuntimeError):
+            pass
     group.SetString("Model", cfg.provider.model)
     group.SetString("BaseUrl", cfg.provider.base_url)
     group.SetString("ApiKey", cfg.provider.api_key)

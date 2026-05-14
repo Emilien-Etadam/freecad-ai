@@ -251,6 +251,12 @@ class TestParamStoreBridge:
                 strings[key] = value
             def SetBool(_self, key, value):
                 bools[key] = value
+            def RemInt(_self, key):
+                ints.pop(key, None)
+            def RemString(_self, key):
+                strings.pop(key, None)
+            def RemBool(_self, key):
+                bools.pop(key, None)
 
         return _FakeGroup(), ints, strings, bools
 
@@ -438,6 +444,86 @@ class TestParamStoreBridge:
         assert cfg_in.thinking == "on"
         assert cfg_in.max_tokens == 16384
         assert cfg_in.enable_tools is False
+
+    def test_write_clears_stale_provider_index_for_custom(self):
+        """Issue #12: saving a non-prefs provider must clear ProviderIndex.
+
+        Scenario: user previously had anthropic (ProviderIndex=0 in the
+        param store), then switched to "custom" via the main Settings
+        dialog. Without clearing, the stale index would shadow the JSON
+        name on next load and the provider selector would revert to
+        anthropic with the custom URL/model still attached.
+        """
+        from freecad_ai.config import (
+            AppConfig, _apply_param_store_overrides, _write_to_param_store,
+        )
+        from unittest.mock import patch
+
+        group, ints, strings, _ = self._fake_param_group(
+            ints={"ProviderIndex": 0},  # stale: anthropic from before
+            strings={"Model": "claude-sonnet-4", "BaseUrl": "https://api.anthropic.com"},
+        )
+
+        cfg_out = AppConfig()
+        cfg_out.provider.name = "custom"
+        cfg_out.provider.model = "my-local-model"
+        cfg_out.provider.base_url = "http://gateway.example/v1"
+        cfg_out.provider.api_key = "secret"
+
+        with patch("freecad_ai.config._get_param_group", return_value=group):
+            _write_to_param_store(cfg_out)
+
+        # ProviderIndex must be cleared so the load path doesn't shadow JSON
+        assert "ProviderIndex" not in ints
+        # Other fields still mirrored
+        assert strings["Model"] == "my-local-model"
+        assert strings["BaseUrl"] == "http://gateway.example/v1"
+
+        # Round-trip: applying overrides onto a fresh cfg loaded from JSON
+        # must keep "custom" — the absent ProviderIndex means no override.
+        cfg_in = AppConfig()
+        cfg_in.provider.name = "custom"  # as it would be after JSON load
+        cfg_in.provider.model = "my-local-model"
+        cfg_in.provider.base_url = "http://gateway.example/v1"
+        with patch("freecad_ai.config._get_param_group", return_value=group):
+            _apply_param_store_overrides(cfg_in)
+
+        assert cfg_in.provider.name == "custom"
+        assert cfg_in.provider.model == "my-local-model"
+        assert cfg_in.provider.base_url == "http://gateway.example/v1"
+
+    def test_write_clears_stale_provider_index_for_all_non_prefs_providers(self):
+        """Same guarantee for github/huggingface/zhipu — any provider in
+        PROVIDERS but not in the prefs combo must clear the stale index.
+        """
+        from freecad_ai.config import (
+            AppConfig, _PARAM_PROVIDERS, _write_to_param_store,
+        )
+        from freecad_ai.llm.providers import PROVIDERS
+        from unittest.mock import patch
+
+        non_prefs = [n for n in PROVIDERS if n not in _PARAM_PROVIDERS]
+        assert non_prefs, "expected at least one provider absent from prefs combo"
+
+        for name in non_prefs:
+            group, ints, _, _ = self._fake_param_group(ints={"ProviderIndex": 0})
+            cfg = AppConfig()
+            cfg.provider.name = name
+            with patch("freecad_ai.config._get_param_group", return_value=group):
+                _write_to_param_store(cfg)
+            assert "ProviderIndex" not in ints, (
+                f"writing provider={name!r} must clear stale ProviderIndex")
+
+    def test_param_providers_subset_of_real_providers(self):
+        """Guard against drift: every name in _PARAM_PROVIDERS must exist
+        in the real PROVIDERS registry. If we drop a provider from
+        providers.py without trimming this list, the prefs combo would
+        offer a phantom choice.
+        """
+        from freecad_ai.config import _PARAM_PROVIDERS
+        from freecad_ai.llm.providers import PROVIDERS
+        missing = [n for n in _PARAM_PROVIDERS if n not in PROVIDERS]
+        assert not missing, f"_PARAM_PROVIDERS lists unknown providers: {missing}"
 
 
 class TestConfigDirResolution:

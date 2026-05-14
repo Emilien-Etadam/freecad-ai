@@ -884,13 +884,21 @@ class SettingsDialog(QDialog):
         if 0 <= index < len(names):
             name = names[index]
             preset = PROVIDER_PRESETS.get(name, {})
-            self.base_url_edit.setText(preset.get("base_url", ""))
-            model = preset.get("default_model", "")
-            self.model_edit.setText(model)
+            # Only overwrite when the preset has a concrete value. The
+            # "custom" preset ships empty strings — wiping the user's
+            # gateway/model on every switch-to-custom is the second half
+            # of #12. Real providers always have non-empty presets, so
+            # behavior is unchanged there.
+            new_base_url = preset.get("base_url", "")
+            if new_base_url:
+                self.base_url_edit.setText(new_base_url)
+            new_model = preset.get("default_model", "")
+            if new_model:
+                self.model_edit.setText(new_model)
 
-            # Load saved params for this model, or provider defaults
+            # Load saved params for the (possibly preserved) model
             cfg = get_config()
-            self._load_model_params_table(model, cfg)
+            self._load_model_params_table(self.model_edit.text(), cfg)
 
             # Apply provider-recommended reranker settings only when the
             # reranker UI is still at its factory default (off + top_n 15).
