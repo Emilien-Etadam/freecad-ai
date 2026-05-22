@@ -1192,10 +1192,15 @@ class ChatDockWidget(QDockWidget):
 
     def _send_message(self):
         """Send the current input to the LLM."""
+        if self._worker and self._worker.isRunning():
+            # Button is in "Stop" state — interrupt the in-flight run instead
+            # of sending. Input is usually empty here, so this must run before
+            # the empty-text guard below.
+            self._worker.requestInterruption()
+            return
+
         text = self.input_edit.toPlainText().strip()
         if not text:
-            return
-        if self._worker and self._worker.isRunning():
             return
 
         self.input_edit.clear()
@@ -2560,10 +2565,10 @@ class ChatDockWidget(QDockWidget):
     def _set_loading(self, loading):
         """Enable/disable input while LLM is processing."""
         colors = _get_theme_colors()
-        self.send_btn.setEnabled(not loading)
+        self.send_btn.setEnabled(True)
         self.input_edit.setReadOnly(loading)
         if loading:
-            self.send_btn.setText("...")
+            self.send_btn.setText("Stop")
             self.send_btn.setStyleSheet(
                 f"QPushButton {{ background-color: {colors['system_label']}; color: white; "
                 f"font-weight: bold; padding: 8px 16px; }}"
