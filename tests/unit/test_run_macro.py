@@ -38,3 +38,14 @@ def test_run_macro_dangerous_passes_skip_safety(tmp_path):
         res = freecad_tools._handle_run_macro(str(f))
     assert res.success is True
     assert exec_mock.call_args.kwargs.get("skip_safety") is True
+
+
+def test_run_macro_handles_undecodable_file(tmp_path):
+    # A macro file that is not valid UTF-8 must yield a clean error, not a crash.
+    bad = tmp_path / "Bad.FCMacro"
+    bad.write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+    with patch.object(freecad_tools, "_macro_allowed_dirs", return_value=[str(tmp_path)]), \
+         patch("freecad_ai.core.dangerous_mode.get_dangerous_mode", return_value=_DM(False)):
+        res = freecad_tools._handle_run_macro("Bad")
+    assert res.success is False
+    assert "could not read" in res.error.lower()

@@ -2718,7 +2718,7 @@ def _macro_allowed_dirs() -> list:
     return dirs
 
 
-def _active_doc_dir():
+def _active_doc_dir() -> "str | None":
     try:
         import FreeCAD as App
         doc = App.ActiveDocument
@@ -2743,7 +2743,7 @@ def _handle_run_macro(macro: str) -> ToolResult:
     try:
         with open(path, "r", encoding="utf-8") as f:
             code = f.read()
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         return ToolResult(success=False, output="", error=f"Could not read macro: {e}")
 
     result = execute_code(code, skip_safety=dangerous)
