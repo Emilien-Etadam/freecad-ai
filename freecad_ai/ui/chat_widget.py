@@ -1027,6 +1027,7 @@ class ChatDockWidget(QDockWidget):
         self.danger_banner.setStyleSheet(
             "background-color: #b00020; color: white; font-weight: bold; "
             "padding: 4px;")
+        self.danger_banner.setAlignment(QtCore.Qt.AlignCenter)
         self.danger_banner.setVisible(False)
         layout.addWidget(self.danger_banner)
 
@@ -1172,6 +1173,10 @@ class ChatDockWidget(QDockWidget):
         if active and not self.danger_toggle.isChecked():
             self.danger_toggle.blockSignals(True)
             self.danger_toggle.setChecked(True)
+            self.danger_toggle.blockSignals(False)
+        elif not active and self.danger_toggle.isChecked():
+            self.danger_toggle.blockSignals(True)
+            self.danger_toggle.setChecked(False)
             self.danger_toggle.blockSignals(False)
 
     # ── Theme refresh on show ──────────────────────────────
