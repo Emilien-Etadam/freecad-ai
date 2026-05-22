@@ -396,6 +396,9 @@ class AppConfig:
     # {"gemma4:27b": {"temperature": 1.0, "top_p": 0.95, "top_k": 64}, ...}
     auto_execute: bool = False
     max_retries: int = 3
+    # Max agentic tool-loop turns per user message. 0 = endless (the Stop
+    # button is then the only brake). Default 30 preserves prior behavior.
+    max_tool_turns: int = 30
     enable_tools: bool = True
     thinking: str = "off"  # "off", "on", "extended"
     strip_thinking_history: bool | None = None  # None=auto-detect, True/False=override
@@ -405,6 +408,11 @@ class AppConfig:
     # Each entry: {"name": str, "command": str, "args": list, "env": dict, "enabled": bool}
     user_tools_disabled: list = field(default_factory=list)
     scan_freecad_macros: bool = False
+    # Dangerous mode: relaxes executor safety layers (static pattern blocking,
+    # headless sandbox pre-check, execution timeout) and widens run_macro's
+    # file-resolution reach to arbitrary paths. The GUI never writes True here;
+    # persistence is only via hand-editing config.json. Honored on load.
+    dangerous_skip_safety: bool = False
     hooks_disabled: list = field(default_factory=list)
     # When True, hook/user-tool Edit and New buttons open files via the OS
     # default handler (xdg-open / Launch Services / file association). When
