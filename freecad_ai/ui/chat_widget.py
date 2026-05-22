@@ -36,6 +36,7 @@ from ..config import LOGS_DIR, get_config, prune_oldest_files, save_current_conf
 from ..core.conversation import Conversation
 from ..core.executor import extract_code_blocks, execute_code
 from ..core.loop_control import should_continue_loop
+from ..core.input_history import InputHistory
 from .message_view import (
     _get_theme_colors,
     get_chat_display_stylesheet,
@@ -803,6 +804,8 @@ class ChatDockWidget(QDockWidget):
 
         self.conversation = Conversation()
         self._worker = None
+        self._input_history = InputHistory()
+        self._suppress_history_reset = False
         self._streaming_html = ""
         self._retry_count = 0
         self._anchor_connected = False
@@ -871,6 +874,7 @@ class ChatDockWidget(QDockWidget):
                 app.aboutToQuit.connect(self._mark_shutdown)
         except Exception:
             pass
+        self._refresh_input_history()
 
     def _mark_shutdown(self):
         self._shutting_down = True
@@ -1255,6 +1259,33 @@ class ChatDockWidget(QDockWidget):
             )
         self.token_label.setStyleSheet(f"color: {colors['thinking_text']}; font-size: 11px;")
 
+    # ── Input history ───────────────────────────────────────
+
+    def _refresh_input_history(self) -> None:
+        """Rebuild the input-history entries from the current conversation.
+
+        Filters to user messages whose content is a plain string (skips
+        multipart messages that carry image attachments alongside text).
+        """
+        entries = [
+            m["content"]
+            for m in self.conversation.messages
+            if m.get("role") == "user" and isinstance(m.get("content"), str)
+        ]
+        self._input_history.set_entries(entries)
+
+    def _set_input_text(self, text: str) -> None:
+        """Replace input contents and place caret at end without tripping the
+        history-reset path that user typing goes through."""
+        self._suppress_history_reset = True
+        try:
+            self.input_edit.setPlainText(text)
+            cur = self.input_edit.textCursor()
+            cur.movePosition(QTextCursor.End)
+            self.input_edit.setTextCursor(cur)
+        finally:
+            self._suppress_history_reset = False
+
     # ── Event filter (Enter to send) ────────────────────────
 
     def eventFilter(self, obj, event):
@@ -1343,6 +1374,7 @@ class ChatDockWidget(QDockWidget):
 
         # Add to conversation and display
         self.conversation.add_user_message(text, images=images, documents=documents)
+        self._refresh_input_history()
         display_content = self.conversation.messages[-1]["content"]
         self._append_html(render_message("user", display_content))
         self._attachment_strip.clear()
@@ -1657,6 +1689,7 @@ class ChatDockWidget(QDockWidget):
             self.conversation.save()
 
         self.conversation = Conversation()
+        self._refresh_input_history()
         self.chat_display.clear()
         self._update_token_count()
 
@@ -1714,6 +1747,7 @@ class ChatDockWidget(QDockWidget):
             # Load the selected conversation
             try:
                 self.conversation = Conversation.load(conv_id)
+                self._refresh_input_history()
                 self._rerender_chat()
                 self._update_token_count()
                 self._append_html(render_message(
