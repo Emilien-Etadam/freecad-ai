@@ -257,7 +257,8 @@ class CodeReviewDialog(QDialog):
     def _check(self):
         """Validate the code in a sandbox without touching the live document."""
         self.code = self.code_edit.toPlainText()
-        result = validate_code(self.code)
+        from ..core.dangerous_mode import get_dangerous_mode
+        result = validate_code(self.code, skip_safety=get_dangerous_mode().active)
         self._render_result(
             result,
             translate("CodeReviewDialog", "Validated — no errors in sandbox."),
