@@ -267,6 +267,10 @@ def execute_code(code: str, timeout: int = 30, sandbox: bool = True,
       2. Subprocess sandbox (test in headless FreeCAD first)
       3. Undo transactions (roll back on Python-level failure)
       4. Auto-save (backup document before execution)
+
+    skip_safety: When True, skip static validation, the headless sandbox
+        pre-check, and the SIGALRM timeout. The undo transaction (rollback on
+        failure) and auto-save remain active. Used by Dangerous mode only.
     """
     # Layer 1: Static validation (skipped in dangerous mode)
     if not skip_safety:
@@ -281,7 +285,7 @@ def execute_code(code: str, timeout: int = 30, sandbox: bool = True,
 
     from .active_document import get_synced_active_document, refresh_gui_for_document
 
-    # Layer 2: Subprocess sandbox — optional copy of saved document so getObject-style code validates safely
+    # Layer 2: Subprocess sandbox (skipped in dangerous mode) — optional copy of saved document so getObject-style code validates safely
     sandbox_copy_path = None
     if sandbox and not skip_safety:
         pre_doc = get_synced_active_document()
@@ -364,12 +368,13 @@ def execute_code(code: str, timeout: int = 30, sandbox: bool = True,
         try:
             exec(code, namespace)
         finally:
-            try:
-                signal.alarm(0)
-                if _old_handler is not None:
-                    signal.signal(signal.SIGALRM, _old_handler)
-            except (OSError, AttributeError):
-                pass
+            if not skip_safety:
+                try:
+                    signal.alarm(0)
+                    if _old_handler is not None:
+                        signal.signal(signal.SIGALRM, _old_handler)
+                except (OSError, AttributeError):
+                    pass
 
         # Recompute and commit
         _recompute(namespace)
@@ -413,6 +418,9 @@ def validate_code(code: str, timeout: int = 15, skip_safety: bool = False) -> Ex
 
     If no FreeCAD console binary is available, the sandbox is skipped and
     the result is a pass — matches execute_code()'s fallback behavior.
+
+    skip_safety: When True, return success immediately without running any
+        validation (Dangerous mode).
     """
     if skip_safety:
         return ExecutionResult(success=True, stdout="", stderr="", code=code)

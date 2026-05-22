@@ -199,7 +199,7 @@ class TestValidateCodePublic:
 
 
 class TestSkipSafety:
-    """execute_code(skip_safety=True) bypasses layers 1-3 but keeps layer 4."""
+    """skip_safety bypasses static validation, the sandbox, and the timeout, while keeping the undo transaction."""
 
     def test_safe_mode_blocks_dangerous_code(self):
         code = "import subprocess\nsubprocess.run(['ls'])"
@@ -209,8 +209,8 @@ class TestSkipSafety:
 
     def test_skip_safety_bypasses_static_validation(self):
         # With skip_safety=True the static deny-list is skipped, so execution does
-        # NOT short-circuit at layer 1. With no active document it falls through to
-        # the active-document guard — proving validation did not block.
+        # NOT short-circuit at static validation. With no active document it falls
+        # through to the active-document guard — proving validation did not block.
         code = "import subprocess\nsubprocess.run(['ls'])"
         with patch(
             "freecad_ai.core.active_document.get_synced_active_document",
