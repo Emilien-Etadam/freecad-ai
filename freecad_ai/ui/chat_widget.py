@@ -281,6 +281,8 @@ class _LLMWorker(QThread):
     def _simple_stream(self, client):
         """Stream without tools (original behavior)."""
         for chunk in client.stream(self.messages, system=self.system_prompt):
+            if self.isInterruptionRequested():
+                break
             self._full_response += chunk
             self.token_received.emit(chunk)
         self.response_finished.emit(self._full_response)
@@ -321,6 +323,10 @@ class _LLMWorker(QThread):
             turn_text = "".join(text_parts)
             turn_thinking = "".join(thinking_parts)
 
+            if self.isInterruptionRequested():
+                self._full_response += "\n\n_⏹ Stopped by user._"
+                self.response_finished.emit(self._full_response)
+                return
             if not tool_calls:
                 # No tool calls — we're done
                 self.response_finished.emit(self._full_response)
