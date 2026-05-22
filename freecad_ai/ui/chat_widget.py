@@ -234,7 +234,8 @@ class _LLMWorker(QThread):
         self._tool_result_ready = QtCore.QMutex()
         self._tool_result_wait = QtCore.QWaitCondition()
         self._pending_result = None
-        self._max_tool_turns = 30  # Safety limit
+        from ..config import get_config as _gc
+        self._max_tool_turns = _gc().max_tool_turns  # 0 = endless
         self._strip_thinking = False  # resolved in run()
         self._tool_timeline = []  # timing data for summary visualization
 
@@ -288,7 +289,9 @@ class _LLMWorker(QThread):
         """Agentic loop: stream -> execute tools -> feed results -> repeat."""
         messages = list(self.messages)
 
-        for turn in range(self._max_tool_turns):
+        from ..core.loop_control import should_continue_loop
+        turn = 0
+        while should_continue_loop(self._max_tool_turns, turn, self.isInterruptionRequested()):
             text_parts = []
             thinking_parts = []
             tool_calls = []
@@ -297,6 +300,8 @@ class _LLMWorker(QThread):
             for event in client.stream_with_tools(
                 messages, system=self.system_prompt, tools=self.tools
             ):
+                if self.isInterruptionRequested():
+                    break
                 if event.type == "text_delta":
                     text_parts.append(event.text)
                     self._full_response += event.text
@@ -439,6 +444,12 @@ class _LLMWorker(QThread):
                     for tc, r in zip(tool_calls, tool_result_messages)
                 ],
             })
+            turn += 1
+
+        if self.isInterruptionRequested():
+            self._full_response += "\n\n_⏹ Stopped by user._"
+            self.response_finished.emit(self._full_response)
+            return
 
         # If we reach here, we hit the max turns limit
         limit_msg = "\n\n[{}]".format(
@@ -457,14 +468,15 @@ class _LLMWorker(QThread):
         self._pending_result = None
         self.tool_exec_requested.emit(tool_name, json.dumps(arguments))
 
-        # Wait for result with timeout (30s) to avoid deadlock
         self._tool_result_ready.lock()
-        deadline = 300000  # ms (5 min, for interactive tools like select_geometry)
         while self._pending_result is None:
-            if not self._tool_result_wait.wait(self._tool_result_ready, deadline):
-                # Timed out
+            if self.isInterruptionRequested():
                 self._tool_result_ready.unlock()
-                return {"success": False, "output": "", "error": "Tool execution timed out (main thread did not respond)"}
+                return {"success": False, "output": "", "error": "Stopped by user"}
+            # Wake every 250 ms so a Stop request is noticed promptly. Replaces
+            # the old fixed 5-minute single wait — cooperative interruption is
+            # now the way long interactive tools end.
+            self._tool_result_wait.wait(self._tool_result_ready, 250)
         self._tool_result_ready.unlock()
 
         return self._pending_result
