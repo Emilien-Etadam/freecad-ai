@@ -46,3 +46,15 @@ def test_dangerous_mode_still_resolves_name(tmp_path):
     path, err = resolve_macro_path("Named", [str(tmp_path)], dangerous=True)
     assert err is None
     assert path == str(tmp_path / "Named.FCMacro")
+
+
+def test_null_byte_rejected_safe_mode(tmp_path):
+    path, err = resolve_macro_path("foo\x00bar", [str(tmp_path)], dangerous=False)
+    assert path is None
+    assert err  # clean error string, not a crash
+
+
+def test_null_byte_rejected_dangerous_mode(tmp_path):
+    path, err = resolve_macro_path("foo\x00bar", [str(tmp_path)], dangerous=True)
+    assert path is None
+    assert err

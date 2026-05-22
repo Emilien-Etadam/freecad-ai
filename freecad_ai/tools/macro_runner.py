@@ -39,6 +39,9 @@ def resolve_macro_path(macro, allowed_dirs, dangerous,
     if not macro:
         return None, "No macro specified."
 
+    if "\x00" in macro:
+        return None, "Invalid macro name (contains a null byte)."
+
     if dangerous:
         candidates = []
         if os.path.isabs(macro):
