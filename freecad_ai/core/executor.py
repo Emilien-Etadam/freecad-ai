@@ -255,7 +255,8 @@ def _auto_save(namespace: dict):
         pass  # Best-effort
 
 
-def execute_code(code: str, timeout: int = 30, sandbox: bool = True) -> ExecutionResult:
+def execute_code(code: str, timeout: int = 30, sandbox: bool = True,
+                 skip_safety: bool = False) -> ExecutionResult:
     """Execute Python code in FreeCAD's context.
 
     The code runs with FreeCAD modules available in its namespace.
@@ -267,21 +268,22 @@ def execute_code(code: str, timeout: int = 30, sandbox: bool = True) -> Executio
       3. Undo transactions (roll back on Python-level failure)
       4. Auto-save (backup document before execution)
     """
-    # Layer 1: Static validation
-    warnings = _validate_code(code)
-    if warnings:
-        return ExecutionResult(
-            success=False,
-            stdout="",
-            stderr="Pre-execution validation failed:\n" + "\n".join(warnings),
-            code=code,
-        )
+    # Layer 1: Static validation (skipped in dangerous mode)
+    if not skip_safety:
+        warnings = _validate_code(code)
+        if warnings:
+            return ExecutionResult(
+                success=False,
+                stdout="",
+                stderr="Pre-execution validation failed:\n" + "\n".join(warnings),
+                code=code,
+            )
 
     from .active_document import get_synced_active_document, refresh_gui_for_document
 
     # Layer 2: Subprocess sandbox — optional copy of saved document so getObject-style code validates safely
     sandbox_copy_path = None
-    if sandbox:
+    if sandbox and not skip_safety:
         pre_doc = get_synced_active_document()
         fn = getattr(pre_doc, "FileName", "") if pre_doc else ""
         if fn and os.path.isfile(fn):
@@ -350,13 +352,14 @@ def execute_code(code: str, timeout: int = 30, sandbox: bool = True) -> Executio
 
         # Set an alarm timeout to catch infinite loops / hangs
         _old_handler = None
-        try:
-            def _timeout_handler(signum, frame):
-                raise TimeoutError("Code execution timed out after {} seconds".format(timeout))
-            _old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(timeout)
-        except (OSError, AttributeError):
-            pass
+        if not skip_safety:
+            try:
+                def _timeout_handler(signum, frame):
+                    raise TimeoutError("Code execution timed out after {} seconds".format(timeout))
+                _old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+                signal.alarm(timeout)
+            except (OSError, AttributeError):
+                pass
 
         try:
             exec(code, namespace)
@@ -400,7 +403,7 @@ def execute_code(code: str, timeout: int = 30, sandbox: bool = True) -> Executio
     )
 
 
-def validate_code(code: str, timeout: int = 15) -> ExecutionResult:
+def validate_code(code: str, timeout: int = 15, skip_safety: bool = False) -> ExecutionResult:
     """Run static + sandbox validation without touching the live document.
 
     Runs Layer 1 (static pattern check) and Layer 2 (headless subprocess
@@ -411,6 +414,8 @@ def validate_code(code: str, timeout: int = 15) -> ExecutionResult:
     If no FreeCAD console binary is available, the sandbox is skipped and
     the result is a pass — matches execute_code()'s fallback behavior.
     """
+    if skip_safety:
+        return ExecutionResult(success=True, stdout="", stderr="", code=code)
     warnings = _validate_code(code)
     if warnings:
         return ExecutionResult(
