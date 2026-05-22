@@ -371,6 +371,42 @@ Objects: {{object_count}}
 Active body: {{active_body}}
 ```
 
+## Running macros & Dangerous mode
+
+The `run_macro` tool lets the assistant run an existing FreeCAD macro and read
+its console output directly — useful for AI-written test harnesses. By default
+it only runs a macro by **name** from FreeCAD's macro directory.
+
+### ⚠️ Dangerous mode — read this
+
+Dangerous mode is an opt-in escape hatch that **removes the safety checks**
+FreeCAD AI normally applies to code it runs. Enable it from the chat panel
+(a confirmation dialog explains the risks; it resets to OFF every time FreeCAD
+restarts, and a red banner shows while it is active).
+
+While Dangerous mode is active:
+
+- **Arbitrary code/commands:** AI-run code can call shell commands, delete
+  files, and do anything your user account is allowed to do.
+- **No timeout:** a macro containing an infinite loop will **freeze FreeCAD's
+  main window with no way to recover — any unsaved work is lost.**
+- **No sandbox pre-check:** broken or destructive code runs straight against
+  your live document.
+- **Endless loops:** if you also set the tool-loop count to `0` (endless), the
+  AI can keep acting until you press **Stop**. There is no other limit, and it
+  can consume a large number of tokens.
+
+**You are solely responsible for anything you run in this mode.** It is provided
+as a power-user convenience and is not tested against malicious or destructive
+input. Document integrity (undo rollback) is the only safeguard that remains on.
+
+To make Dangerous mode persist across restarts (not recommended), set
+`"dangerous_skip_safety": true` in your `config.json` by hand. The GUI will
+never write this for you.
+
+> Note: behavior described here is verified on Linux; the macro-directory
+> resolution uses FreeCAD's cross-platform API but is untested on macOS/Windows.
+
 ## Translations
 
 The UI supports internationalization via Qt's `.ts`/`.qm` translation system. Currently available:
