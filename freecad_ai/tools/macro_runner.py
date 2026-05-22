@@ -3,6 +3,7 @@
 Safe mode: only a bare name resolved within an enumerable set of allowed dirs.
 Dangerous mode: any name or absolute/relative path, anywhere.
 """
+from __future__ import annotations
 
 import os
 
@@ -13,7 +14,7 @@ _DANGEROUS_HINT = (
 )
 
 
-def _resolve_name(name: str, allowed_dirs: list):
+def _resolve_name(name: str, allowed_dirs: list[str]):
     """Find <name>, <name>.FCMacro, or <name>.py within allowed_dirs.
 
     The resolved real path must stay inside the allowed dir. Returns the path
@@ -28,12 +29,15 @@ def _resolve_name(name: str, allowed_dirs: list):
             if not (full == base or full.startswith(base + os.sep)):
                 continue
             if os.path.isfile(full):
+                # Return the original (display-friendly) path form; safety was
+                # already proven against the realpath above.
                 return os.path.join(d, candidate)
     return None
 
 
-def resolve_macro_path(macro, allowed_dirs, dangerous,
-                       active_doc_dir=None, cwd=None):
+def resolve_macro_path(macro: str, allowed_dirs: list[str], dangerous: bool,
+                       active_doc_dir: str | None = None,
+                       cwd: str | None = None):
     """Return (path, error). Exactly one of the two is non-None."""
     macro = (macro or "").strip()
     if not macro:
@@ -50,16 +54,20 @@ def resolve_macro_path(macro, allowed_dirs, dangerous,
             if active_doc_dir:
                 candidates.append(os.path.join(active_doc_dir, macro))
             candidates.append(os.path.join(cwd or os.getcwd(), macro))
-            candidates.append(macro)
         for c in candidates:
             if os.path.isfile(c):
                 return c, None
         named = _resolve_name(macro, allowed_dirs)
         if named:
             return named, None
-        return None, f"Macro not found: {macro}"
+        searched = [d for d in ([active_doc_dir] + list(allowed_dirs)) if d]
+        return None, (
+            f"Macro not found: {macro} (searched: {', '.join(searched) or 'cwd'})"
+        )
 
     # Safe mode — bare name only.
+    # Reject anything path-like. The ".." substring check is intentionally
+    # broad (also rejects names like "a..b") — conservative at a safety boundary.
     if os.sep in macro or (os.altsep and os.altsep in macro) or ".." in macro:
         return None, _DANGEROUS_HINT
     named = _resolve_name(macro, allowed_dirs)

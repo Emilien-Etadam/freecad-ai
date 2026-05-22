@@ -1,3 +1,5 @@
+import os
+
 from freecad_ai.tools.macro_runner import resolve_macro_path
 
 
@@ -51,10 +53,26 @@ def test_dangerous_mode_still_resolves_name(tmp_path):
 def test_null_byte_rejected_safe_mode(tmp_path):
     path, err = resolve_macro_path("foo\x00bar", [str(tmp_path)], dangerous=False)
     assert path is None
-    assert err  # clean error string, not a crash
+    assert "null byte" in err.lower()
 
 
 def test_null_byte_rejected_dangerous_mode(tmp_path):
     path, err = resolve_macro_path("foo\x00bar", [str(tmp_path)], dangerous=True)
     assert path is None
-    assert err
+    assert "null byte" in err.lower()
+
+
+def test_safe_mode_symlink_escape_blocked(tmp_path):
+    # A macro file living outside the allowed dir, exposed via a symlink inside it.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "Secret.FCMacro"
+    secret.write_text("print('secret')")
+
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    os.symlink(str(secret), str(allowed / "Secret.FCMacro"))
+
+    path, err = resolve_macro_path("Secret", [str(allowed)], dangerous=False)
+    assert path is None
+    assert "not found" in err.lower()
