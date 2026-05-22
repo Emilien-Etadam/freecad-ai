@@ -28,14 +28,17 @@ class DangerousMode:
         self._session_armed = True
 
     def disarm(self) -> None:
+        """Disarm for the current session only. Never touches config."""
         self._session_armed = False
 
 
-_INSTANCE = None
+# Singleton
+_dangerous_mode: "DangerousMode | None" = None
 
 
 def get_dangerous_mode() -> DangerousMode:
-    global _INSTANCE
-    if _INSTANCE is None:
-        _INSTANCE = DangerousMode()
-    return _INSTANCE
+    """Get the global DangerousMode singleton."""
+    global _dangerous_mode
+    if _dangerous_mode is None:
+        _dangerous_mode = DangerousMode()
+    return _dangerous_mode
