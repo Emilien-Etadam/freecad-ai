@@ -35,6 +35,7 @@ QTextCursor = QtGui.QTextCursor
 from ..config import LOGS_DIR, get_config, prune_oldest_files, save_current_config
 from ..core.conversation import Conversation
 from ..core.executor import extract_code_blocks, execute_code
+from ..core.loop_control import should_continue_loop
 from .message_view import (
     _get_theme_colors,
     get_chat_display_stylesheet,
@@ -234,8 +235,7 @@ class _LLMWorker(QThread):
         self._tool_result_ready = QtCore.QMutex()
         self._tool_result_wait = QtCore.QWaitCondition()
         self._pending_result = None
-        from ..config import get_config as _gc
-        self._max_tool_turns = _gc().max_tool_turns  # 0 = endless
+        self._max_tool_turns = get_config().max_tool_turns  # 0 = endless
         self._strip_thinking = False  # resolved in run()
         self._tool_timeline = []  # timing data for summary visualization
 
@@ -289,7 +289,6 @@ class _LLMWorker(QThread):
         """Agentic loop: stream -> execute tools -> feed results -> repeat."""
         messages = list(self.messages)
 
-        from ..core.loop_control import should_continue_loop
         turn = 0
         while should_continue_loop(self._max_tool_turns, turn, self.isInterruptionRequested()):
             text_parts = []
@@ -446,6 +445,8 @@ class _LLMWorker(QThread):
             })
             turn += 1
 
+        # If a tool was interrupted mid-wait, the user already saw a tool-failure
+        # bubble; this chat-level note is an intentional, clearer second signal.
         if self.isInterruptionRequested():
             self._full_response += "\n\n_⏹ Stopped by user._"
             self.response_finished.emit(self._full_response)
@@ -469,14 +470,19 @@ class _LLMWorker(QThread):
         self.tool_exec_requested.emit(tool_name, json.dumps(arguments))
 
         self._tool_result_ready.lock()
+        elapsed = 0
+        deadline = 300000  # ms (5 min) — backstop against a hung/crashed main thread
         while self._pending_result is None:
             if self.isInterruptionRequested():
                 self._tool_result_ready.unlock()
                 return {"success": False, "output": "", "error": "Stopped by user"}
-            # Wake every 250 ms so a Stop request is noticed promptly. Replaces
-            # the old fixed 5-minute single wait — cooperative interruption is
-            # now the way long interactive tools end.
+            if elapsed >= deadline:
+                self._tool_result_ready.unlock()
+                return {"success": False, "output": "", "error": "Tool execution timed out (main thread did not respond)"}
+            # Wake every 250 ms so a Stop request is noticed promptly while the
+            # cumulative deadline still guards against a hung main thread.
             self._tool_result_wait.wait(self._tool_result_ready, 250)
+            elapsed += 250
         self._tool_result_ready.unlock()
 
         return self._pending_result
