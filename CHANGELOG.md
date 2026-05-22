@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.15.0-alpha] - 2026-05-23
+
+Adds a `run_macro` tool, a configurable agentic loop count with a Stop button, and an opt-in **Dangerous mode** that trades the workbench's code-safety checks for power-user reach. Driven by [issue #13](https://github.com/ghbalf/freecad-ai/issues/13).
+
+### Added
+
+- **`run_macro` tool** — runs an existing FreeCAD macro file and feeds its console output back to the AI. In normal mode it accepts a bare macro name resolved from FreeCAD's macro directory; file paths require Dangerous mode. ([issue #13](https://github.com/ghbalf/freecad-ai/issues/13))
+- **Configurable agentic loop count** (Settings → "Max tool-loop turns"). `0` means endless; previously hardcoded at 30. Default remains 30.
+- **Stop button** — the Send button becomes "Stop" while the AI is working and interrupts the loop (the only brake when the loop is set to endless).
+- **Dangerous mode** — a session-scoped toggle that disables the code safety checks (static pattern blocking, headless sandbox pre-check, execution timeout) and lets `run_macro` run files from any path. Off at every launch; a red banner shows whenever it is active. **Use at your own risk** — see README.
+
 ## [0.14.3-alpha] - 2026-05-15
 
 A small but data-preserving patch driven by [issue #12](https://github.com/ghbalf/freecad-ai/issues/12): users on the **Custom** LLM provider lost their gateway URL and model on every FreeCAD restart, with the provider selector reverting to "anthropic" while the custom-provider field values stayed visible.

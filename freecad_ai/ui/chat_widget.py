@@ -35,6 +35,7 @@ QTextCursor = QtGui.QTextCursor
 from ..config import LOGS_DIR, get_config, prune_oldest_files, save_current_config
 from ..core.conversation import Conversation
 from ..core.executor import extract_code_blocks, execute_code
+from ..core.loop_control import should_continue_loop
 from .message_view import (
     _get_theme_colors,
     get_chat_display_stylesheet,
@@ -234,7 +235,7 @@ class _LLMWorker(QThread):
         self._tool_result_ready = QtCore.QMutex()
         self._tool_result_wait = QtCore.QWaitCondition()
         self._pending_result = None
-        self._max_tool_turns = 30  # Safety limit
+        self._max_tool_turns = get_config().max_tool_turns  # 0 = endless
         self._strip_thinking = False  # resolved in run()
         self._tool_timeline = []  # timing data for summary visualization
 
@@ -280,6 +281,8 @@ class _LLMWorker(QThread):
     def _simple_stream(self, client):
         """Stream without tools (original behavior)."""
         for chunk in client.stream(self.messages, system=self.system_prompt):
+            if self.isInterruptionRequested():
+                break
             self._full_response += chunk
             self.token_received.emit(chunk)
         self.response_finished.emit(self._full_response)
@@ -288,7 +291,8 @@ class _LLMWorker(QThread):
         """Agentic loop: stream -> execute tools -> feed results -> repeat."""
         messages = list(self.messages)
 
-        for turn in range(self._max_tool_turns):
+        turn = 0
+        while should_continue_loop(self._max_tool_turns, turn, self.isInterruptionRequested()):
             text_parts = []
             thinking_parts = []
             tool_calls = []
@@ -297,6 +301,8 @@ class _LLMWorker(QThread):
             for event in client.stream_with_tools(
                 messages, system=self.system_prompt, tools=self.tools
             ):
+                if self.isInterruptionRequested():
+                    break
                 if event.type == "text_delta":
                     text_parts.append(event.text)
                     self._full_response += event.text
@@ -317,6 +323,10 @@ class _LLMWorker(QThread):
             turn_text = "".join(text_parts)
             turn_thinking = "".join(thinking_parts)
 
+            if self.isInterruptionRequested():
+                self._full_response += "\n\n_⏹ Stopped by user._"
+                self.response_finished.emit(self._full_response)
+                return
             if not tool_calls:
                 # No tool calls — we're done
                 self.response_finished.emit(self._full_response)
@@ -439,6 +449,14 @@ class _LLMWorker(QThread):
                     for tc, r in zip(tool_calls, tool_result_messages)
                 ],
             })
+            turn += 1
+
+        # If a tool was interrupted mid-wait, the user already saw a tool-failure
+        # bubble; this chat-level note is an intentional, clearer second signal.
+        if self.isInterruptionRequested():
+            self._full_response += "\n\n_⏹ Stopped by user._"
+            self.response_finished.emit(self._full_response)
+            return
 
         # If we reach here, we hit the max turns limit
         limit_msg = "\n\n[{}]".format(
@@ -457,14 +475,20 @@ class _LLMWorker(QThread):
         self._pending_result = None
         self.tool_exec_requested.emit(tool_name, json.dumps(arguments))
 
-        # Wait for result with timeout (30s) to avoid deadlock
         self._tool_result_ready.lock()
-        deadline = 300000  # ms (5 min, for interactive tools like select_geometry)
+        elapsed = 0
+        deadline = 300000  # ms (5 min) — backstop against a hung/crashed main thread
         while self._pending_result is None:
-            if not self._tool_result_wait.wait(self._tool_result_ready, deadline):
-                # Timed out
+            if self.isInterruptionRequested():
+                self._tool_result_ready.unlock()
+                return {"success": False, "output": "", "error": "Stopped by user"}
+            if elapsed >= deadline:
                 self._tool_result_ready.unlock()
                 return {"success": False, "output": "", "error": "Tool execution timed out (main thread did not respond)"}
+            # Wake every 250 ms so a Stop request is noticed promptly while the
+            # cumulative deadline still guards against a hung main thread.
+            self._tool_result_wait.wait(self._tool_result_ready, 250)
+            elapsed += 250
         self._tool_result_ready.unlock()
 
         return self._pending_result
@@ -986,11 +1010,32 @@ class ChatDockWidget(QDockWidget):
         self._capture_btn.clicked.connect(self._cycle_capture_mode)
         header.addWidget(self._capture_btn)
 
+        # Dangerous-mode session toggle
+        self.danger_toggle = QtWidgets.QCheckBox(
+            translate("ChatDockWidget", "⚠ Dangerous mode"))
+        self.danger_toggle.setToolTip(
+            translate("ChatDockWidget",
+                      "Disable code safety checks and allow running macros from any path. "
+                      "Session-only — resets when FreeCAD restarts."))
+        self.danger_toggle.toggled.connect(self._on_danger_toggled)
+        header.addWidget(self.danger_toggle)
+
         # Settings button
         settings_btn = QPushButton(translate("ChatDockWidget", "Settings"))
         settings_btn.setMaximumWidth(80)
         settings_btn.clicked.connect(self._open_settings)
         header.addWidget(settings_btn)
+
+        # ── Dangerous-mode banner (inserted before header) ──
+        self.danger_banner = QtWidgets.QLabel(
+            translate("ChatDockWidget",
+                      "⚠ DANGEROUS MODE ACTIVE — safety checks disabled"))
+        self.danger_banner.setStyleSheet(
+            "background-color: #b00020; color: white; font-weight: bold; "
+            "padding: 4px;")
+        self.danger_banner.setAlignment(QtCore.Qt.AlignCenter)
+        self.danger_banner.setVisible(False)
+        layout.addWidget(self.danger_banner)
 
         layout.addLayout(header)
 
@@ -1088,6 +1133,58 @@ class ChatDockWidget(QDockWidget):
 
         self.setWidget(container)
 
+        # Sync banner/toggle with current dangerous-mode state
+        # (shows banner at startup if dangerous_skip_safety was hand-edited in config.json)
+        self._update_danger_banner()
+
+    # ── Dangerous-mode toggle ──────────────────────────────
+
+    def _on_danger_toggled(self, checked):
+        from ..core.dangerous_mode import get_dangerous_mode
+        dm = get_dangerous_mode()
+        if checked:
+            box = QtWidgets.QMessageBox(self)
+            box.setIcon(QtWidgets.QMessageBox.Warning)
+            box.setWindowTitle(translate("ChatDockWidget", "Enable Dangerous mode?"))
+            box.setText(translate(
+                "ChatDockWidget",
+                "Dangerous mode disables the safety checks built into FreeCAD AI."))
+            box.setInformativeText(translate(
+                "ChatDockWidget",
+                "While active:\n"
+                "• AI-run code may call shell commands, delete files, and touch "
+                "anything your user account can.\n"
+                "• A macro with an infinite loop will FREEZE FreeCAD with no "
+                "recovery — unsaved work will be lost.\n"
+                "• Generated code runs against your live document without the "
+                "headless sandbox pre-check.\n\n"
+                "You are solely responsible for what you run. Continue?"))
+            box.setStandardButtons(
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+            box.setDefaultButton(QtWidgets.QMessageBox.No)
+            if box.exec() != QtWidgets.QMessageBox.Yes:
+                self.danger_toggle.blockSignals(True)
+                self.danger_toggle.setChecked(False)
+                self.danger_toggle.blockSignals(False)
+                return
+            dm.arm()
+        else:
+            dm.disarm()
+        self._update_danger_banner()
+
+    def _update_danger_banner(self):
+        from ..core.dangerous_mode import get_dangerous_mode
+        active = get_dangerous_mode().active
+        self.danger_banner.setVisible(active)
+        if active and not self.danger_toggle.isChecked():
+            self.danger_toggle.blockSignals(True)
+            self.danger_toggle.setChecked(True)
+            self.danger_toggle.blockSignals(False)
+        elif not active and self.danger_toggle.isChecked():
+            self.danger_toggle.blockSignals(True)
+            self.danger_toggle.setChecked(False)
+            self.danger_toggle.blockSignals(False)
+
     # ── Theme refresh on show ──────────────────────────────
 
     def showEvent(self, event):
@@ -1174,10 +1271,15 @@ class ChatDockWidget(QDockWidget):
 
     def _send_message(self):
         """Send the current input to the LLM."""
+        if self._worker and self._worker.isRunning():
+            # Button is in "Stop" state — interrupt the in-flight run instead
+            # of sending. Input is usually empty here, so this must run before
+            # the empty-text guard below.
+            self._worker.requestInterruption()
+            return
+
         text = self.input_edit.toPlainText().strip()
         if not text:
-            return
-        if self._worker and self._worker.isRunning():
             return
 
         self.input_edit.clear()
@@ -2542,10 +2644,10 @@ class ChatDockWidget(QDockWidget):
     def _set_loading(self, loading):
         """Enable/disable input while LLM is processing."""
         colors = _get_theme_colors()
-        self.send_btn.setEnabled(not loading)
+        self.send_btn.setEnabled(True)
         self.input_edit.setReadOnly(loading)
         if loading:
-            self.send_btn.setText("...")
+            self.send_btn.setText("Stop")
             self.send_btn.setStyleSheet(
                 f"QPushButton {{ background-color: {colors['system_label']}; color: white; "
                 f"font-weight: bold; padding: 8px 16px; }}"

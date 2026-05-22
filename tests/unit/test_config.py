@@ -1106,3 +1106,21 @@ class TestLogsDir:
 
 
 import os
+
+
+def test_max_tool_turns_default():
+    from freecad_ai.config import AppConfig
+    assert AppConfig().max_tool_turns == 30
+
+
+def test_dangerous_skip_safety_default():
+    from freecad_ai.config import AppConfig
+    assert AppConfig().dangerous_skip_safety is False
+
+
+def test_new_fields_roundtrip():
+    from freecad_ai.config import AppConfig
+    cfg = AppConfig(max_tool_turns=0, dangerous_skip_safety=True)
+    restored = AppConfig.from_dict(cfg.to_dict())
+    assert restored.max_tool_turns == 0
+    assert restored.dangerous_skip_safety is True

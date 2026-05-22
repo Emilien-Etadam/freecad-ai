@@ -4,7 +4,10 @@ Each tool wraps a FreeCAD operation in an undo transaction with error handling.
 Tools are designed to be called by the LLM via structured tool calling.
 """
 
+import os
+
 from .registry import ToolParam, ToolDefinition, ToolResult
+from ..core.executor import execute_code
 
 
 def _coerce_str_list(value):
@@ -2670,9 +2673,9 @@ EXPORT_MODEL = ToolDefinition(
 def _handle_execute_code(code: str) -> ToolResult:
     """Execute arbitrary Python code (fallback tool)."""
     from ..core.active_document import resolve_active_document
-    from ..core.executor import execute_code
+    from ..core.dangerous_mode import get_dangerous_mode
 
-    result = execute_code(code)
+    result = execute_code(code, skip_safety=get_dangerous_mode().active)
     if result.success:
         output = result.stdout.strip() if result.stdout.strip() else "Code executed successfully"
         doc = resolve_active_document()
@@ -2692,6 +2695,81 @@ EXECUTE_CODE = ToolDefinition(
         ToolParam("code", "string", "Python code to execute"),
     ],
     handler=_handle_execute_code,
+)
+
+
+# ── run_macro ────────────────────────────────────────────────
+
+def _macro_allowed_dirs() -> list:
+    """Enumerable macro dirs for safe-mode resolution."""
+    dirs = []
+    try:
+        import FreeCAD as App
+        d = App.getUserMacroDir(True)  # True = create if missing
+        if d:
+            dirs.append(d)
+    except Exception:
+        pass
+    try:
+        from ..config import USER_TOOLS_DIR
+        dirs.append(USER_TOOLS_DIR)
+    except Exception:
+        pass
+    return dirs
+
+
+def _active_doc_dir() -> "str | None":
+    try:
+        import FreeCAD as App
+        doc = App.ActiveDocument
+        fn = getattr(doc, "FileName", "") if doc else ""
+        return os.path.dirname(fn) if fn else None
+    except Exception:
+        return None
+
+
+def _handle_run_macro(macro: str) -> ToolResult:
+    """Run an existing FreeCAD macro file and return its console output."""
+    from ..core.dangerous_mode import get_dangerous_mode
+    from .macro_runner import resolve_macro_path
+
+    dangerous = get_dangerous_mode().active
+    path, err = resolve_macro_path(
+        macro, _macro_allowed_dirs(), dangerous=dangerous,
+        active_doc_dir=_active_doc_dir(),
+    )
+    if err:
+        return ToolResult(success=False, output="", error=err)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            code = f.read()
+    except (OSError, UnicodeDecodeError) as e:
+        return ToolResult(success=False, output="", error=f"Could not read macro: {e}")
+
+    result = execute_code(code, skip_safety=dangerous)
+    if result.success:
+        out = result.stdout.strip() or f"Macro '{macro}' ran successfully (no output)."
+        return ToolResult(success=True, output=out,
+                          data={"macro": path, "stdout": result.stdout})
+    return ToolResult(success=False, output=result.stdout, error=result.stderr)
+
+
+RUN_MACRO = ToolDefinition(
+    name="run_macro",
+    description=(
+        "Run an EXISTING FreeCAD macro file and return its console output "
+        "(stdout/stderr). Use this to execute a macro the user already has on "
+        "disk, e.g. a test harness. In normal mode, pass a bare macro NAME "
+        "(without extension) that lives in FreeCAD's macro directory; file "
+        "paths are refused unless the user has enabled Dangerous mode. Use "
+        "execute_code instead when you want to run code you are writing inline."
+    ),
+    category="general",
+    parameters=[
+        ToolParam("macro", "string",
+                  "Macro name (normal mode) or file path (Dangerous mode only)."),
+    ],
+    handler=_handle_run_macro,
 )
 
 
@@ -4765,6 +4843,7 @@ ALL_TOOLS = [
     MODIFY_PROPERTY,
     EXPORT_MODEL,
     EXECUTE_CODE,
+    RUN_MACRO,
     UNDO,
     REDO,
     UNDO_HISTORY,

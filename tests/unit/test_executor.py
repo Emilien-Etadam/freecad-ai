@@ -4,6 +4,7 @@ import pytest
 
 from unittest.mock import patch
 
+from freecad_ai.core import executor
 from freecad_ai.core.executor import (
     ExecutionResult,
     extract_code_blocks,
@@ -195,3 +196,31 @@ class TestValidateCodePublic:
         assert hasattr(result, "stdout")
         assert hasattr(result, "stderr")
         assert hasattr(result, "code")
+
+
+class TestSkipSafety:
+    """skip_safety bypasses static validation, the sandbox, and the timeout, while keeping the undo transaction."""
+
+    def test_safe_mode_blocks_dangerous_code(self):
+        code = "import subprocess\nsubprocess.run(['ls'])"
+        res = executor.execute_code(code, sandbox=False, skip_safety=False)
+        assert res.success is False
+        assert "validation failed" in res.stderr.lower()
+
+    def test_skip_safety_bypasses_static_validation(self):
+        # With skip_safety=True the static deny-list is skipped, so execution does
+        # NOT short-circuit at static validation. With no active document it falls
+        # through to the active-document guard — proving validation did not block.
+        code = "import subprocess\nsubprocess.run(['ls'])"
+        with patch(
+            "freecad_ai.core.active_document.get_synced_active_document",
+            return_value=None,
+        ):
+            res = executor.execute_code(code, sandbox=False, skip_safety=True)
+        assert res.success is False
+        assert "no active document" in res.stderr.lower()
+
+    def test_validate_code_skip_safety_returns_pass(self):
+        code = "import subprocess\nsubprocess.run(['ls'])"
+        res = executor.validate_code(code, skip_safety=True)
+        assert res.success is True
