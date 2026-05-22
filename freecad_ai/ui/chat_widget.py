@@ -1004,11 +1004,31 @@ class ChatDockWidget(QDockWidget):
         self._capture_btn.clicked.connect(self._cycle_capture_mode)
         header.addWidget(self._capture_btn)
 
+        # Dangerous-mode session toggle
+        self.danger_toggle = QtWidgets.QCheckBox(
+            translate("ChatDockWidget", "⚠ Dangerous mode"))
+        self.danger_toggle.setToolTip(
+            translate("ChatDockWidget",
+                      "Disable code safety checks and allow running macros from any path. "
+                      "Session-only — resets when FreeCAD restarts."))
+        self.danger_toggle.toggled.connect(self._on_danger_toggled)
+        header.addWidget(self.danger_toggle)
+
         # Settings button
         settings_btn = QPushButton(translate("ChatDockWidget", "Settings"))
         settings_btn.setMaximumWidth(80)
         settings_btn.clicked.connect(self._open_settings)
         header.addWidget(settings_btn)
+
+        # ── Dangerous-mode banner (inserted before header) ──
+        self.danger_banner = QtWidgets.QLabel(
+            translate("ChatDockWidget",
+                      "⚠ DANGEROUS MODE ACTIVE — safety checks disabled"))
+        self.danger_banner.setStyleSheet(
+            "background-color: #b00020; color: white; font-weight: bold; "
+            "padding: 4px;")
+        self.danger_banner.setVisible(False)
+        layout.addWidget(self.danger_banner)
 
         layout.addLayout(header)
 
@@ -1105,6 +1125,54 @@ class ChatDockWidget(QDockWidget):
         layout.addLayout(footer)
 
         self.setWidget(container)
+
+        # Sync banner/toggle with current dangerous-mode state
+        # (shows banner at startup if dangerous_skip_safety was hand-edited in config.json)
+        self._update_danger_banner()
+
+    # ── Dangerous-mode toggle ──────────────────────────────
+
+    def _on_danger_toggled(self, checked):
+        from ..core.dangerous_mode import get_dangerous_mode
+        dm = get_dangerous_mode()
+        if checked:
+            box = QtWidgets.QMessageBox(self)
+            box.setIcon(QtWidgets.QMessageBox.Warning)
+            box.setWindowTitle(translate("ChatDockWidget", "Enable Dangerous mode?"))
+            box.setText(translate(
+                "ChatDockWidget",
+                "Dangerous mode disables the safety checks built into FreeCAD AI."))
+            box.setInformativeText(translate(
+                "ChatDockWidget",
+                "While active:\n"
+                "• AI-run code may call shell commands, delete files, and touch "
+                "anything your user account can.\n"
+                "• A macro with an infinite loop will FREEZE FreeCAD with no "
+                "recovery — unsaved work will be lost.\n"
+                "• Generated code runs against your live document without the "
+                "headless sandbox pre-check.\n\n"
+                "You are solely responsible for what you run. Continue?"))
+            box.setStandardButtons(
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+            box.setDefaultButton(QtWidgets.QMessageBox.No)
+            if box.exec() != QtWidgets.QMessageBox.Yes:
+                self.danger_toggle.blockSignals(True)
+                self.danger_toggle.setChecked(False)
+                self.danger_toggle.blockSignals(False)
+                return
+            dm.arm()
+        else:
+            dm.disarm()
+        self._update_danger_banner()
+
+    def _update_danger_banner(self):
+        from ..core.dangerous_mode import get_dangerous_mode
+        active = get_dangerous_mode().active
+        self.danger_banner.setVisible(active)
+        if active and not self.danger_toggle.isChecked():
+            self.danger_toggle.blockSignals(True)
+            self.danger_toggle.setChecked(True)
+            self.danger_toggle.blockSignals(False)
 
     # ── Theme refresh on show ──────────────────────────────
 

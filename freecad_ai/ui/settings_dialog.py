@@ -266,6 +266,20 @@ class SettingsDialog(QDialog):
         )
         fixed_layout.addRow(translate("SettingsDialog", "Context Window:"), self.context_window_spin)
 
+        self.max_tool_turns_spin = QSpinBox()
+        self.max_tool_turns_spin.setRange(0, 999)
+        self.max_tool_turns_spin.setSpecialValueText(
+            translate("SettingsDialog", "endless"))
+        self.max_tool_turns_spin.setValue(30)
+        self.max_tool_turns_spin.setToolTip(
+            translate("SettingsDialog",
+                      "Maximum number of tool-call iterations per response.\n"
+                      "0 means no limit (endless). Default: 30.")
+        )
+        fixed_layout.addRow(
+            translate("SettingsDialog", "Max tool-loop turns (0 = endless):"),
+            self.max_tool_turns_spin)
+
         model_params_layout.addLayout(fixed_layout)
 
         # Freeform sampling parameters table (saved per model name)
@@ -800,6 +814,7 @@ class SettingsDialog(QDialog):
         self.model_edit.setText(cfg.provider.model)
         self.max_tokens_spin.setValue(cfg.max_tokens)
         self.context_window_spin.setValue(cfg.context_window)
+        self.max_tool_turns_spin.setValue(cfg.max_tool_turns)
 
         # Model parameters table
         self._load_model_params_table(cfg.provider.model, cfg)
@@ -1078,6 +1093,7 @@ class SettingsDialog(QDialog):
         cfg.provider.model = self.model_edit.text()
         cfg.max_tokens = self.max_tokens_spin.value()
         cfg.context_window = self.context_window_spin.value()
+        cfg.max_tool_turns = self.max_tool_turns_spin.value()
 
         # Save model parameters for the current model
         model_name = self.model_edit.text().strip()
@@ -1433,6 +1449,10 @@ class SettingsDialog(QDialog):
             pass
         try:
             cfg.context_window = self.context_window_spin.value()
+        except Exception:
+            pass
+        try:
+            cfg.max_tool_turns = self.max_tool_turns_spin.value()
         except Exception:
             pass
 

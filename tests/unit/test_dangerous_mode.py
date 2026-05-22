@@ -34,3 +34,20 @@ def test_arming_does_not_mutate_config(monkeypatch):
 
 def test_singleton_identity():
     assert get_dangerous_mode() is get_dangerous_mode()
+
+
+def test_arm_then_save_config_does_not_persist(tmp_path, monkeypatch):
+    import json
+    import freecad_ai.config as config_mod
+    cfg = config_mod.AppConfig()
+    monkeypatch.setattr(config_mod, "get_config", lambda: cfg)
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", str(tmp_path / "config.json"))
+
+    from freecad_ai.core.dangerous_mode import DangerousMode
+    dm = DangerousMode()
+    dm.arm()                        # session-only
+    config_mod.save_config(cfg)     # any save (e.g. dock-layout change)
+
+    with open(str(tmp_path / "config.json")) as f:
+        reloaded = config_mod.AppConfig.from_dict(json.load(f))
+    assert reloaded.dangerous_skip_safety is False
