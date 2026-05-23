@@ -1286,17 +1286,65 @@ class ChatDockWidget(QDockWidget):
         finally:
             self._suppress_history_reset = False
 
-    # ── Event filter (Enter to send) ────────────────────────
+    # ── Event filter (Enter to send, Up/Down for history) ───
 
     def eventFilter(self, obj, event):
         if obj is self.input_edit and event.type() == QtCore.QEvent.KeyPress:
-            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-                if event.modifiers() & Qt.ShiftModifier:
-                    return False  # Shift+Enter: newline
-                else:
-                    self._send_message()
-                    return True
+            if self._handle_input_keypress(event):
+                return True
         return super().eventFilter(obj, event)
+
+    def _handle_input_keypress(self, event) -> bool:
+        """Return True if the KeyPress was consumed by dock-level handling.
+
+        Covers (1) Enter/Return send, (2) Up/Down history navigation gated on
+        caret position, and (3) cycle reset on input-editing keys. Returning
+        False lets the keystroke proceed to Qt's default text-edit handling.
+        """
+        # 1. Enter / Return — existing send behavior (unchanged).
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if event.modifiers() & Qt.ShiftModifier:
+                return False  # Shift+Enter: newline
+            self._send_message()
+            return True
+
+        # 2. History navigation — only when the input is editable.
+        if not self.input_edit.isReadOnly():
+            cursor = self.input_edit.textCursor()
+            if event.key() == Qt.Key_Up and cursor.atStart():
+                result = self._input_history.up(self.input_edit.toPlainText())
+                if result is not None:
+                    self._set_input_text(result)
+                return True
+            if event.key() == Qt.Key_Down and cursor.atEnd():
+                result = self._input_history.down()
+                if result is not None:
+                    self._set_input_text(result)
+                return True
+
+            # 3. Reset the history cycle on any input-editing key.
+            if self._is_history_reset_key(event):
+                if not self._suppress_history_reset:
+                    self._input_history.reset()
+                # Don't consume — let Qt handle the keystroke normally.
+
+        return False
+
+    @staticmethod
+    def _is_history_reset_key(event) -> bool:
+        """Return True if a KeyPress should end the history navigation cycle.
+
+        Triggers on any key that produces a character (event.text() non-empty)
+        or any editing key (Backspace/Delete/Home/End). Bare modifier presses
+        (Shift/Ctrl/Alt) produce empty text and so do NOT trigger a reset.
+        Up/Down are explicitly excluded — they drive the cycle.
+        """
+        k = event.key()
+        if k in (Qt.Key_Up, Qt.Key_Down):
+            return False
+        if k in (Qt.Key_Backspace, Qt.Key_Delete, Qt.Key_Home, Qt.Key_End):
+            return True
+        return bool(event.text())
 
     # ── Actions ─────────────────────────────────────────────
 
