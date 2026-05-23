@@ -1311,6 +1311,13 @@ class ChatDockWidget(QDockWidget):
         # 2. History navigation — only when the input is editable.
         if not self.input_edit.isReadOnly():
             cursor = self.input_edit.textCursor()
+            # Up/Down at the document edge: consume the event even when the
+            # helper returns None (empty / clamped history) — at the edge there
+            # is nowhere else for the caret to move, so swallowing the key
+            # avoids a dead-feeling keystroke. atStart()/atEnd() are
+            # document-level, so in a multi-line draft history only triggers
+            # when the caret is at the very first/last position; mid-document
+            # arrows fall through below to Qt's default caret movement.
             if event.key() == Qt.Key_Up and cursor.atStart():
                 result = self._input_history.up(self.input_edit.toPlainText())
                 if result is not None:
@@ -1326,9 +1333,8 @@ class ChatDockWidget(QDockWidget):
             if self._is_history_reset_key(event):
                 if not self._suppress_history_reset:
                     self._input_history.reset()
-                # Don't consume — let Qt handle the keystroke normally.
 
-        return False
+        return False  # Let Qt handle any non-history keystroke.
 
     @staticmethod
     def _is_history_reset_key(event) -> bool:
