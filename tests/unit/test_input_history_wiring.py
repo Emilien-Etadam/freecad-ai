@@ -100,11 +100,37 @@ def test_refresh_filters_to_user_string_content():
 
 def test_set_input_text_brackets_suppress_flag_and_replaces():
     fake = _make_self()
+    seen_flag_during_call = {}
+
+    def _side_effect(_text):
+        seen_flag_during_call["value"] = fake._suppress_history_reset
+
+    fake.input_edit.setPlainText.side_effect = _side_effect
+
     cw.ChatDockWidget._set_input_text(fake, "hello")
+
     fake.input_edit.setPlainText.assert_called_once_with("hello")
     fake.input_edit.setTextCursor.assert_called_once()
-    # Flag was reset by the finally block.
-    assert fake._suppress_history_reset is False
+    assert seen_flag_during_call["value"] is True   # flag was True mid-call
+    assert fake._suppress_history_reset is False    # finally restored it
+
+
+def test_refresh_skips_system_messages():
+    """System messages (added via Conversation.add_system_message) are stored
+    with role=user and a "[System] " prefix. They must NOT appear in the
+    input history."""
+    fake = _make_self(messages=[
+        {"role": "user", "content": "build me a box"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "[System] Code execution failed: bad geometry"},
+        {"role": "user", "content": "fix it"},
+    ])
+    cw.ChatDockWidget._refresh_input_history(fake)
+    # Up returns the most-recent real user prompt first, then the older one.
+    # The system message must be absent entirely.
+    assert fake._input_history.up("") == "fix it"
+    assert fake._input_history.up("") == "build me a box"
+    assert fake._input_history.up("") is None
 
 
 # ── _handle_input_keypress: Up/Down navigation ──────────────

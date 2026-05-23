@@ -805,7 +805,9 @@ class ChatDockWidget(QDockWidget):
         self.conversation = Conversation()
         self._worker = None
         self._input_history = InputHistory()
-        self._suppress_history_reset = False
+        self._suppress_history_reset = False  # set True around programmatic
+                                              # _set_input_text() to guard a
+                                              # future textChanged-based reset
         self._streaming_html = ""
         self._retry_count = 0
         self._anchor_connected = False
@@ -1265,12 +1267,17 @@ class ChatDockWidget(QDockWidget):
         """Rebuild the input-history entries from the current conversation.
 
         Filters to user messages whose content is a plain string (skips
-        multipart messages that carry image attachments alongside text).
+        multipart messages that carry image attachments). Also skips system
+        messages — Conversation.add_system_message stores them as role=user
+        with a "[System] " prefix (see freecad_ai/core/conversation.py), and
+        those are not real user prompts that belong in the history.
         """
         entries = [
             m["content"]
             for m in self.conversation.messages
-            if m.get("role") == "user" and isinstance(m.get("content"), str)
+            if m.get("role") == "user"
+            and isinstance(m.get("content"), str)
+            and not m["content"].startswith("[System] ")
         ]
         self._input_history.set_entries(entries)
 
