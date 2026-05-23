@@ -36,6 +36,7 @@ from ..config import LOGS_DIR, get_config, prune_oldest_files, save_current_conf
 from ..core.conversation import Conversation
 from ..core.executor import extract_code_blocks, execute_code
 from ..core.loop_control import should_continue_loop
+from ..core.input_history import InputHistory
 from .message_view import (
     _get_theme_colors,
     get_chat_display_stylesheet,
@@ -803,6 +804,10 @@ class ChatDockWidget(QDockWidget):
 
         self.conversation = Conversation()
         self._worker = None
+        self._input_history = InputHistory()
+        self._suppress_history_reset = False  # set True around programmatic
+                                              # _set_input_text() to guard a
+                                              # future textChanged-based reset
         self._streaming_html = ""
         self._retry_count = 0
         self._anchor_connected = False
@@ -871,6 +876,7 @@ class ChatDockWidget(QDockWidget):
                 app.aboutToQuit.connect(self._mark_shutdown)
         except Exception:
             pass
+        self._refresh_input_history()
 
     def _mark_shutdown(self):
         self._shutting_down = True
@@ -1255,17 +1261,103 @@ class ChatDockWidget(QDockWidget):
             )
         self.token_label.setStyleSheet(f"color: {colors['thinking_text']}; font-size: 11px;")
 
-    # ── Event filter (Enter to send) ────────────────────────
+    # ── Input history ───────────────────────────────────────
+
+    def _refresh_input_history(self) -> None:
+        """Rebuild the input-history entries from the current conversation.
+
+        Filters to user messages whose content is a plain string (skips
+        multipart messages that carry image attachments). Also skips system
+        messages — Conversation.add_system_message stores them as role=user
+        with a "[System] " prefix (see freecad_ai/core/conversation.py), and
+        those are not real user prompts that belong in the history.
+        """
+        entries = [
+            m["content"]
+            for m in self.conversation.messages
+            if m.get("role") == "user"
+            and isinstance(m.get("content"), str)
+            and not m["content"].startswith("[System] ")
+        ]
+        self._input_history.set_entries(entries)
+
+    def _set_input_text(self, text: str) -> None:
+        """Replace input contents and place caret at end without tripping the
+        history-reset path that user typing goes through."""
+        self._suppress_history_reset = True
+        try:
+            self.input_edit.setPlainText(text)
+            cur = self.input_edit.textCursor()
+            cur.movePosition(QTextCursor.End)
+            self.input_edit.setTextCursor(cur)
+        finally:
+            self._suppress_history_reset = False
+
+    # ── Event filter (Enter to send, Up/Down for history) ───
 
     def eventFilter(self, obj, event):
         if obj is self.input_edit and event.type() == QtCore.QEvent.KeyPress:
-            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-                if event.modifiers() & Qt.ShiftModifier:
-                    return False  # Shift+Enter: newline
-                else:
-                    self._send_message()
-                    return True
+            if self._handle_input_keypress(event):
+                return True
         return super().eventFilter(obj, event)
+
+    def _handle_input_keypress(self, event) -> bool:
+        """Return True if the KeyPress was consumed by dock-level handling.
+
+        Covers (1) Enter/Return send, (2) Up/Down history navigation gated on
+        caret position, and (3) cycle reset on input-editing keys. Returning
+        False lets the keystroke proceed to Qt's default text-edit handling.
+        """
+        # 1. Enter / Return — existing send behavior (unchanged).
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if event.modifiers() & Qt.ShiftModifier:
+                return False  # Shift+Enter: newline
+            self._send_message()
+            return True
+
+        # 2. History navigation — only when the input is editable.
+        if not self.input_edit.isReadOnly():
+            cursor = self.input_edit.textCursor()
+            # Up/Down at the document edge: consume the event even when the
+            # helper returns None (empty / clamped history) — at the edge there
+            # is nowhere else for the caret to move, so swallowing the key
+            # avoids a dead-feeling keystroke. atStart()/atEnd() are
+            # document-level, so in a multi-line draft history only triggers
+            # when the caret is at the very first/last position; mid-document
+            # arrows fall through below to Qt's default caret movement.
+            if event.key() == Qt.Key_Up and cursor.atStart():
+                result = self._input_history.up(self.input_edit.toPlainText())
+                if result is not None:
+                    self._set_input_text(result)
+                return True
+            if event.key() == Qt.Key_Down and cursor.atEnd():
+                result = self._input_history.down()
+                if result is not None:
+                    self._set_input_text(result)
+                return True
+
+            # 3. Reset the history cycle on any input-editing key.
+            if self._is_history_reset_key(event):
+                if not self._suppress_history_reset:
+                    self._input_history.reset()
+
+        return False  # Let Qt handle any non-history keystroke.
+
+    @staticmethod
+    def _is_history_reset_key(event) -> bool:
+        """Return True if a KeyPress should end the history navigation cycle.
+
+        Triggers on any key that produces a character (event.text() non-empty)
+        or any editing key (Backspace/Delete/Home/End). Bare modifier presses
+        (Shift/Ctrl/Alt) produce empty text and so do NOT trigger a reset.
+        Up/Down are explicitly excluded — they drive the cycle.
+        """
+        k = event.key()
+        if k in (Qt.Key_Up, Qt.Key_Down):
+            return False
+        if k in (Qt.Key_Backspace, Qt.Key_Delete, Qt.Key_Home, Qt.Key_End):
+            return True
+        return bool(event.text())
 
     # ── Actions ─────────────────────────────────────────────
 
@@ -1343,6 +1435,7 @@ class ChatDockWidget(QDockWidget):
 
         # Add to conversation and display
         self.conversation.add_user_message(text, images=images, documents=documents)
+        self._refresh_input_history()
         display_content = self.conversation.messages[-1]["content"]
         self._append_html(render_message("user", display_content))
         self._attachment_strip.clear()
@@ -1657,6 +1750,7 @@ class ChatDockWidget(QDockWidget):
             self.conversation.save()
 
         self.conversation = Conversation()
+        self._refresh_input_history()
         self.chat_display.clear()
         self._update_token_count()
 
@@ -1714,6 +1808,7 @@ class ChatDockWidget(QDockWidget):
             # Load the selected conversation
             try:
                 self.conversation = Conversation.load(conv_id)
+                self._refresh_input_history()
                 self._rerender_chat()
                 self._update_token_count()
                 self._append_html(render_message(
