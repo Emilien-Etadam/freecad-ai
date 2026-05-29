@@ -374,7 +374,7 @@ class ProviderConfig:
     name: str = "anthropic"
     api_key: str = ""
     base_url: str = "https://api.anthropic.com"
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-6"
 
     def apply_preset(self, provider_name: str):
         """Apply a provider preset, updating base_url and model to defaults."""

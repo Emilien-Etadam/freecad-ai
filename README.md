@@ -58,6 +58,14 @@ New-Item -ItemType SymbolicLink -Path "$env:APPDATA\FreeCAD\Mod\freecad-ai" -Tar
 
 Or manually copy the repository into `%APPDATA%\FreeCAD\Mod\freecad-ai`.
 
+> **FreeCAD 1.1+ uses version-scoped user dirs.** The `Mod` directory moved
+> under a per-version folder, so on Linux the path is
+> `~/.local/share/FreeCAD/v1.1/Mod/freecad-ai` (e.g. `v1.1`, `v1.2`), with the
+> equivalent `…/FreeCAD/v1.1/Mod/` layout on macOS and Windows. If the
+> workbench doesn't appear after a restart, check that you symlinked into the
+> versioned `Mod/` for the FreeCAD release you're running. The legacy
+> unversioned path above still works on many builds but is no longer canonical.
+
 ---
 
 Restart FreeCAD. The **FreeCAD AI** workbench will appear in the workbench selector.

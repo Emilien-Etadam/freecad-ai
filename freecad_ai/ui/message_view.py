@@ -106,6 +106,12 @@ def _read_freecad_mode_name() -> str:
       - "FreeCAD Light"
       - "FreeCAD Classic"
 
+    A user can also run a dark/light UI by setting only the `StyleSheet`
+    preference (e.g. "OpenDark.qss") without selecting a PreferencePack,
+    leaving `Theme` empty. We consult `StyleSheet` as a secondary signal
+    so those sessions don't fall through to the unreliable QPalette probe
+    and render unreadable light-on-dark text (issue #16).
+
     Returns:
         The theme name string, or a sensible fallback like "Custom/Unknown".
     """
@@ -117,6 +123,10 @@ def _read_freecad_mode_name() -> str:
 
         if theme:
             return theme
+
+        stylesheet = hgrp.GetString("StyleSheet", "").strip()
+        if stylesheet:
+            return stylesheet
 
         return "Custom/Unknown"
     except Exception:

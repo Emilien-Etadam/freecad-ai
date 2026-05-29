@@ -56,3 +56,63 @@ def test_unknown_name_with_no_freecad_falls_back_safely(detector):
     assert detector("") is False
     assert detector("Custom/Unknown") is False
     assert detector(None) is False  # type: ignore[arg-type]
+
+
+def _install_fake_freecad(monkeypatch, params):
+    """Inject a fake FreeCAD whose MainWindow ParamGet returns `params`."""
+    import sys
+
+    class _FakeGroup:
+        def GetString(self, key, default=""):  # noqa: N802 — FreeCAD camelCase
+            return params.get(key, default)
+
+    class _FakeFreeCAD:
+        @staticmethod
+        def ParamGet(path):  # noqa: N802
+            return _FakeGroup()
+
+    monkeypatch.setitem(sys.modules, "FreeCAD", _FakeFreeCAD)
+
+
+class TestStyleSheetFallback:
+    """Issue #16: a user can run a dark UI by setting only the StyleSheet
+    preference (e.g. "OpenDark.qss") without selecting a PreferencePack
+    Theme. With Theme empty the detector previously dropped to the
+    unreliable QPalette probe and rendered unreadable light-on-dark text.
+    The StyleSheet name is the next-most-reliable signal after Theme.
+    """
+
+    def test_dark_stylesheet_used_when_theme_empty(self, monkeypatch):
+        from freecad_ai.ui import message_view
+
+        _install_fake_freecad(
+            monkeypatch, {"Theme": "", "StyleSheet": "OpenDark.qss"}
+        )
+        name = message_view._read_freecad_mode_name()
+        assert "dark" in name.lower()
+        assert message_view._is_dark_mode(name) is True
+
+    def test_light_stylesheet_used_when_theme_empty(self, monkeypatch):
+        from freecad_ai.ui import message_view
+
+        _install_fake_freecad(
+            monkeypatch, {"Theme": "", "StyleSheet": "OpenLight.qss"}
+        )
+        name = message_view._read_freecad_mode_name()
+        assert message_view._is_dark_mode(name) is False
+
+    def test_theme_takes_precedence_over_stylesheet(self, monkeypatch):
+        # An explicit PreferencePack Theme is the user's top-level choice
+        # and must win even if a contradictory StyleSheet is set.
+        from freecad_ai.ui import message_view
+
+        _install_fake_freecad(
+            monkeypatch, {"Theme": "FreeCAD Light", "StyleSheet": "OpenDark.qss"}
+        )
+        assert message_view._read_freecad_mode_name() == "FreeCAD Light"
+
+    def test_both_empty_falls_back_to_unknown(self, monkeypatch):
+        from freecad_ai.ui import message_view
+
+        _install_fake_freecad(monkeypatch, {"Theme": "", "StyleSheet": ""})
+        assert message_view._read_freecad_mode_name() == "Custom/Unknown"

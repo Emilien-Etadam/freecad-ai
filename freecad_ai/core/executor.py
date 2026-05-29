@@ -303,8 +303,13 @@ def execute_code(code: str, timeout: int = 30, sandbox: bool = True,
                     code=code,
                 )
         try:
+            # The dry-run must get the same budget as the live execution
+            # (which arms a SIGALRM for the full `timeout`). Capping it lower
+            # made valid-but-slow code — e.g. scaling a complex shape with
+            # Shape.transformGeometry — fail the pre-check with a spurious
+            # "timed out after 15 seconds" and never run (issue #14).
             safe, sandbox_err = _sandbox_test(
-                code, timeout=min(timeout, 15), document_path=sandbox_copy_path
+                code, timeout=timeout, document_path=sandbox_copy_path
             )
             if not safe:
                 return ExecutionResult(

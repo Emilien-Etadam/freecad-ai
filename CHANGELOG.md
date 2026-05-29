@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.15.1-alpha] - 2026-05-29
+
+A bug-fix patch driven by three GitHub issues: spurious sandbox timeouts on valid-but-slow code ([#14](https://github.com/ghbalf/freecad-ai/issues/14)), a stale default Anthropic model ([#15](https://github.com/ghbalf/freecad-ai/issues/15)), and a dark UI rendered with unreadable light-on-dark text when set via a StyleSheet alone ([#16](https://github.com/ghbalf/freecad-ai/issues/16)).
+
+### Fixed
+
+- **Spurious "Sandbox: code timed out after 15 seconds"** (`freecad_ai/core/executor.py`). The headless sandbox pre-check was hard-capped at `min(timeout, 15)`s while the live execution armed a SIGALRM for the full `timeout` (default 30s). Valid-but-slow operations — e.g. scaling a complex shape with `Shape.transformGeometry` — failed the dry-run at 15s and never ran. The sandbox now gets the same time budget as execution, matching `validate_code()`. ([issue #14](https://github.com/ghbalf/freecad-ai/issues/14), reported by trougnouf)
+- **Dark UI rendered unreadable when set via StyleSheet alone** (`freecad_ai/ui/message_view.py:_read_freecad_mode_name`). A user running a dark `.qss` (e.g. `OpenDark.qss`) without selecting a PreferencePack left the `Theme` preference empty, so detection fell through to the unreliable QPalette probe and painted light-on-dark text. The detector now consults the `StyleSheet` preference as a secondary signal after `Theme`. ([issue #16](https://github.com/ghbalf/freecad-ai/issues/16), reported by JohnMcLear)
+
+### Changed
+
+- **Default Anthropic model bumped to `claude-sonnet-4-6`** (was the stale dated alias `claude-sonnet-4-20250514`), across the `anthropic` and `openrouter` provider presets and the `ProviderConfig` default. ([issue #15](https://github.com/ghbalf/freecad-ai/issues/15), reported by JohnMcLear)
+
+### Docs
+
+- **Installation path updated for FreeCAD 1.1+** version-scoped user dirs (`~/.local/share/FreeCAD/v1.1/Mod/`), with a troubleshooting note for the "installed but doesn't appear" case. ([issue #14](https://github.com/ghbalf/freecad-ai/issues/14), reported by trougnouf)
+
+### Tests
+
+- `tests/unit/test_executor.py::TestSandboxTimeout` — parametrized check that the sandbox dry-run receives the full configured timeout, not a value capped at 15s.
+- `tests/unit/test_theme_detection.py::TestStyleSheetFallback` — StyleSheet consulted when Theme is empty, Theme takes precedence over StyleSheet, both-empty falls back to `Custom/Unknown`.
+
 ## [0.15.0-alpha] - 2026-05-23
 
 Adds a `run_macro` tool, a configurable agentic loop count with a Stop button, an opt-in **Dangerous mode** that trades the workbench's code-safety checks for power-user reach, and shell-style Up/Down history in the chat input. The first three are driven by [issue #13](https://github.com/ghbalf/freecad-ai/issues/13).

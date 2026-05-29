@@ -9,7 +9,7 @@ supports native tool calling.
 PROVIDERS = {
     "anthropic": {
         "base_url": "https://api.anthropic.com",
-        "default_model": "claude-sonnet-4-20250514",
+        "default_model": "claude-sonnet-4-6",
         "api_style": "anthropic",
         "supports_tools": True,
     },
@@ -33,7 +33,7 @@ PROVIDERS = {
     },
     "openrouter": {
         "base_url": "https://openrouter.ai/api/v1",
-        "default_model": "anthropic/claude-sonnet-4-20250514",
+        "default_model": "anthropic/claude-sonnet-4-6",
         "api_style": "openai",
         "supports_tools": True,
     },

@@ -224,3 +224,33 @@ class TestSkipSafety:
         code = "import subprocess\nsubprocess.run(['ls'])"
         res = executor.validate_code(code, skip_safety=True)
         assert res.success is True
+
+
+class TestSandboxTimeout:
+    """The headless sandbox dry-run must get the same time budget as the
+    real execution. Issue #14: execute_code() previously capped the sandbox
+    at min(timeout, 15)s, so a valid-but-slow operation (e.g. scaling a
+    complex shape with Shape.transformGeometry) failed the pre-check with
+    "Sandbox: code timed out after 15 seconds" and never ran — even though
+    the live execution would have allowed the full timeout.
+    """
+
+    @pytest.mark.parametrize("configured", [20, 30, 45])
+    def test_sandbox_receives_full_configured_timeout(self, configured):
+        seen = {}
+
+        def _capture(code, timeout=15, document_path=None):
+            seen["timeout"] = timeout
+            return True, ""
+
+        with patch("freecad_ai.core.executor._sandbox_test", side_effect=_capture):
+            with patch(
+                "freecad_ai.core.active_document.get_synced_active_document",
+                return_value=None,
+            ):
+                executor.execute_code("x = 1", timeout=configured)
+
+        assert seen["timeout"] == configured, (
+            "sandbox dry-run was throttled below the configured execution "
+            "timeout — slow-but-valid code will falsely time out"
+        )
