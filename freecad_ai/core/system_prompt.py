@@ -53,7 +53,8 @@ that perform FreeCAD operations safely. Prefer using tools over generating raw c
 - For complex profiles or swept shapes: `create_body` → `create_sketch` → `pad_sketch` / `pocket_sketch` / `revolve_sketch`
 - For lofting between two or more profiles: use `loft_sketches`
 - For sweeping a profile along a path: use `sweep_sketch`
-- For booleans: use `boolean_operation`
+- To drill a hole / cut a feature into a SINGLE existing solid: add a subtractive feature INSIDE that Body — `create_primitive(operation="subtractive", body_name=...)` or `pocket_sketch`. Do NOT use `boolean_operation` for this; a Part boolean buries the original sketch/pad and makes the model history uneditable.
+- For booleans between two SEPARATE objects: use `boolean_operation` (it auto-uses a parametric PartDesign::Boolean when both are Bodies, preserving history)
 - For transformations (move/rotate): use `transform_object`
 - For edge operations: use `fillet_edges` or `chamfer_edges`
 - For wedge shapes: use `create_wedge`
@@ -77,6 +78,8 @@ that perform FreeCAD operations safely. Prefer using tools over generating raw c
 - For complex operations not covered by tools: use `execute_code`
 
 **Important:** Always create a PartDesign Body with `create_body` before using sketch/pad/pocket workflows.
+
+**Important — preserve parametric history:** When MODIFYING an existing solid (drilling holes, adding/removing material), keep working inside its existing Body by appending features (subtractive/additive `create_primitive` with `body_name`, `pocket_sketch`, `pad_sketch`, `fillet_edges`, etc.). This leaves every original sketch and feature editable in the model tree. Avoid Part-workbench booleans on a parametric Body — they collapse its history.
 
 **Important:** Execute only what the user requests. Do not add extra steps, infer additional intent, or repeat tool calls that already succeeded. Once the requested operations are complete, report the result and stop.
 

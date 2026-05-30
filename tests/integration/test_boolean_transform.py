@@ -155,3 +155,93 @@ results["data"] = {
         # Rotation angle should be ~90 degrees (in radians: pi/2 ≈ 1.5708)
         import math
         assert abs(d["angle"] - math.pi / 2) < 0.01
+
+
+class TestBooleanHistoryPreservation:
+    """Regression tests for issue #17: a boolean between two PartDesign Bodies
+    must NOT collapse the base Body's parametric history.
+
+    A ``Part::Cut`` (etc.) claims its operands as tree children, reparenting the
+    base Body under the new node — it stops being top-level and its Sketch/Pad
+    become buried and uneditable. ``boolean_operation`` must instead route
+    body-to-body operations through a ``PartDesign::Boolean`` appended inside the
+    base Body, so the Body stays top-level with its full feature history intact.
+    """
+
+    # Builds two padded Bodies, runs the boolean, then reports whether the base
+    # Body survived as a top-level (history-preserving) node and which TypeId was
+    # used. OPERATION is substituted per-test.
+    _SCRIPT = """
+from freecad_ai.tools.freecad_tools import (
+    _handle_create_body, _handle_create_sketch, _handle_pad_sketch,
+    _handle_boolean_operation,
+)
+
+
+def build_padded_body(label, geo, length):
+    bn = _handle_create_body(label).data["name"]
+    sn = _handle_create_sketch(
+        plane="XY", body_name=bn, geometries=[geo], label=label + "Sketch"
+    ).data["name"]
+    _handle_pad_sketch(sketch_name=sn, length=length, label=label + "Pad")
+    doc.recompute()
+    return bn
+
+
+base = build_padded_body(
+    "Base", {"type": "rectangle", "x": 0, "y": 0, "width": 40, "height": 30}, 20.0)
+tool = build_padded_body(
+    "Tool", {"type": "circle", "cx": 20, "cy": 15, "radius": 5}, 25.0)
+
+r = _handle_boolean_operation(operation="OPERATION", object1=base, object2=tool)
+doc.recompute()
+
+# A node is "claimed" (non-top-level) if another object lists it as a child:
+# PartDesign::Body.Group, or Part::Cut/Fuse/Common .Base/.Tool.
+claimed = set()
+for o in doc.Objects:
+    if getattr(o, "Group", None):
+        claimed.update(c.Name for c in o.Group)
+    if o.TypeId in ("Part::Cut", "Part::Fuse", "Part::Common"):
+        for attr in ("Base", "Tool"):
+            c = getattr(o, attr, None)
+            if c is not None:
+                claimed.add(c.Name)
+
+base_obj = doc.getObject(base)
+results["data"] = {
+    "success": r.success,
+    "base_top_level": base_obj.Name not in claimed,
+    "result_type": doc.getObject(r.data["name"]).TypeId,
+    "has_part_boolean": any(
+        o.TypeId in ("Part::Cut", "Part::Fuse", "Part::Common") for o in doc.Objects),
+    "shape_valid": base_obj.Shape.isValid(),
+}
+"""
+
+    def test_cut_two_bodies_preserves_base_history(self, run_freecad_script):
+        """Cutting two Bodies keeps the base Body top-level and editable."""
+        result = run_freecad_script(self._SCRIPT.replace("OPERATION", "cut"))
+        assert result["ok"], result.get("error")
+        d = result["data"]
+        assert d["success"]
+        # The crux of issue #17: the base Body must remain a top-level node.
+        assert d["base_top_level"], (
+            "base Body was reparented (history collapsed) — "
+            f"result_type={d['result_type']}")
+        # Body-to-body boolean must use the parametric PartDesign feature,
+        # never a Part:: boolean that consumes the Body.
+        assert d["result_type"] == "PartDesign::Boolean"
+        assert not d["has_part_boolean"]
+        assert d["shape_valid"]
+
+    def test_fuse_two_bodies_preserves_base_history(self, run_freecad_script):
+        """Fusing two Bodies also routes through PartDesign::Boolean."""
+        result = run_freecad_script(self._SCRIPT.replace("OPERATION", "fuse"))
+        assert result["ok"], result.get("error")
+        d = result["data"]
+        assert d["success"]
+        assert d["base_top_level"]
+        assert d["result_type"] == "PartDesign::Boolean"
+        assert not d["has_part_boolean"]
+        assert d["shape_valid"]

@@ -1278,18 +1278,42 @@ def _handle_boolean_operation(
             hint = _suggest_similar(doc, object2)
             return ToolResult(success=False, output="", error=f"Object '{object2}' not found.{hint}")
 
+        op = operation.lower()
+        if op not in ("fuse", "cut", "common"):
+            return ToolResult(
+                success=False, output="",
+                error=f"Unknown operation: {operation}. Use: fuse, cut, common",
+            )
+
+        # When BOTH operands are PartDesign Bodies, use a parametric
+        # PartDesign::Boolean inside the base Body instead of a Part:: boolean.
+        # A Part::Cut/Fuse/Common claims its operands as tree children,
+        # reparenting the base Body under the new node — its sketches and
+        # features become buried and uneditable (issue #17). PartDesign::Boolean
+        # appends the operation to the base Body's feature history, so the Body
+        # stays top-level and fully editable.
+        if obj1.TypeId == "PartDesign::Body" and obj2.TypeId == "PartDesign::Body":
+            pd_type_map = {"fuse": "Fuse", "cut": "Cut", "common": "Common"}
+            boolean = obj1.newObject("PartDesign::Boolean", label or operation.capitalize())
+            boolean.Type = pd_type_map[op]
+            boolean.addObjects([obj2])
+            return ToolResult(
+                success=True,
+                output=(f"Boolean {operation} of '{obj1.Label}' and '{obj2.Label}' "
+                        f"(parametric PartDesign feature inside '{obj1.Label}' — "
+                        f"history preserved)"),
+                data={"name": boolean.Name, "label": boolean.Label,
+                      "base_body": obj1.Name},
+            )
+
+        # Otherwise (one or both operands are plain Part shapes) fall back to a
+        # generic Part:: boolean, which works on any shape.
         op_map = {
             "fuse": "Part::Fuse",
             "cut": "Part::Cut",
             "common": "Part::Common",
         }
-        part_type = op_map.get(operation.lower())
-        if not part_type:
-            return ToolResult(
-                success=False, output="",
-                error=f"Unknown operation: {operation}. Use: fuse, cut, common"
-            )
-
+        part_type = op_map[op]
         name = label or operation.capitalize()
         result_obj = doc.addObject(part_type, name)
         result_obj.Base = obj1
@@ -1306,7 +1330,17 @@ def _handle_boolean_operation(
 
 BOOLEAN_OPERATION = ToolDefinition(
     name="boolean_operation",
-    description="Perform a boolean operation (fuse/cut/common) between two Part objects.",
+    description=(
+        "Boolean operation (fuse/cut/common) between two SEPARATE objects. "
+        "If both operands are PartDesign Bodies, this automatically uses a "
+        "parametric PartDesign::Boolean inside the first Body, preserving its "
+        "editable feature history. For plain Part shapes it uses a Part:: "
+        "boolean, which consumes both operands into the result. "
+        "Do NOT use this to drill a hole / cut a feature into a SINGLE existing "
+        "solid — for that, add a feature inside that Body instead: "
+        "create_primitive(operation='subtractive', body_name=...) or "
+        "pocket_sketch."
+    ),
     category="modeling",
     parameters=[
         ToolParam("operation", "string", "Boolean operation type", enum=["fuse", "cut", "common"]),

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.15.2-alpha] - 2026-05-30
+
+A bug-fix patch for [issue #17](https://github.com/ghbalf/freecad-ai/issues/17): cutting or fusing into an existing model could collapse its parametric feature tree, leaving the original sketches and features buried and uneditable.
+
+### Fixed
+
+- **Boolean operations collapsed the parametric feature tree** (`freecad_ai/tools/freecad_tools.py:_handle_boolean_operation`). Asking the AI to cut or fuse into an existing model could leave the original sketches and features buried and uneditable: a `Part::Cut`/`Fuse`/`Common` claims its operands as tree children, so the base Body was reparented underneath the boolean node and stopped being a top-level, editable object. `boolean_operation` now detects when **both** operands are PartDesign Bodies and routes through a parametric `PartDesign::Boolean` appended inside the base Body — the Body stays top-level with its full feature history intact and the result is identical geometry. Operations involving a plain Part shape still use a `Part::` boolean. ([issue #17](https://github.com/ghbalf/freecad-ai/issues/17), reported by 0xrushi)
+
+### Changed
+
+- **Tool-selection guidance now favors history-preserving edits** (`freecad_ai/core/system_prompt.py`). The Act-mode prompt steers the AI to modify an existing solid by appending a feature inside its Body (`create_primitive(operation="subtractive", body_name=...)`, `pocket_sketch`, etc.) rather than reaching for a Part-workbench boolean, and the `boolean_operation` tool description spells out that it is for two separate objects and auto-uses `PartDesign::Boolean` between Bodies.
+
+### Tests
+
+- `tests/integration/test_boolean_transform.py::TestBooleanHistoryPreservation` — cutting and fusing two PartDesign Bodies keeps the base Body top-level, produces a `PartDesign::Boolean` (never a `Part::Cut`), and yields a valid shape.
+
 ## [0.15.1-alpha] - 2026-05-29
 
 A bug-fix patch driven by three GitHub issues: spurious sandbox timeouts on valid-but-slow code ([#14](https://github.com/ghbalf/freecad-ai/issues/14)), a stale default Anthropic model ([#15](https://github.com/ghbalf/freecad-ai/issues/15)), and a dark UI rendered with unreadable light-on-dark text when set via a StyleSheet alone ([#16](https://github.com/ghbalf/freecad-ai/issues/16)).
