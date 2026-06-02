@@ -454,7 +454,7 @@ def _handle_create_sketch(
         # Gather attachment facts from explicit params, or fall back to the GUI
         # selection when neither support nor face was given.
         sup, fc = support, face
-        if not sup and not fc:
+        if not support and not face:
             picked = _read_planar_selection()
             if picked:
                 sup, fc = picked
@@ -462,6 +462,7 @@ def _handle_create_sketch(
         sup_kind = ""
         face_exists = face_planar = False
         in_body = None
+        sup_obj = None
         if sup:
             sup_obj = _get_object(doc, sup)
             if sup_obj is None:
@@ -496,12 +497,13 @@ def _handle_create_sketch(
         else:
             sketch = doc.addObject("Sketcher::SketchObject", label or "Sketch")
 
-        # Apply the attachment.
+        # Apply the attachment. sup_obj is the resolved support object (non-None
+        # whenever the resolver returned a face/plane mode).
         if spec["mode"] == "face":
-            sketch.AttachmentSupport = [(_get_object(doc, spec["support"]), spec["sub"])]
+            sketch.AttachmentSupport = [(sup_obj, spec["sub"])]
             sketch.MapMode = "FlatFace"
         elif spec["mode"] == "plane":
-            sketch.AttachmentSupport = [(_get_object(doc, spec["support"]), "")]
+            sketch.AttachmentSupport = [(sup_obj, "")]
             sketch.MapMode = "FlatFace"
         elif spec["mode"] == "origin":
             plane_feat = _get_body_plane(container, spec["plane"])
@@ -527,18 +529,16 @@ def _handle_create_sketch(
 
         doc.recompute()
 
-        # Verify a face/plane attachment actually resolved (no silent failure).
+        # If a face/plane attachment can't resolve, FreeCAD marks the sketch's
+        # State as Invalid/Error after recompute. (The executor sandbox is the
+        # higher-level net — it also captures the C++ PositionBySupport error.)
         if spec["mode"] in ("face", "plane"):
-            try:
-                placement_ok = sketch.Placement is not None and (
-                    sketch.MapMode == "FlatFace")
-            except Exception:
-                placement_ok = False
-            if not placement_ok:
+            state = list(getattr(sketch, "State", []) or [])
+            if any(s in ("Invalid", "Error") for s in state):
                 return ToolResult(
                     success=False, output="",
                     error=(f"Failed to attach sketch to '{spec['support']}'"
-                           + (f":{spec['sub']}" if spec.get('sub') else "")
+                           + (f":{spec['sub']}" if spec.get("sub") else "")
                            + " — attachment did not resolve."))
 
         geo_count = 0
