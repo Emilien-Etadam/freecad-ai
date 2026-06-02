@@ -329,6 +329,25 @@ def _resolve_sketch_attachment(support, face, plane, body_present,
     return {"mode": "standalone"}
 
 
+def _resolve_datum_plane_attachment(support, face, plane, body_present,
+                                    support_kind, face_exists, face_planar, in_body):
+    """Reference resolution for create_datum_plane. Pure — no FreeCAD calls.
+
+    Delegates to ``_resolve_sketch_attachment`` and remaps the one datum-specific
+    decision: a datum plane cannot be free-floating, so a ``standalone`` result
+    (no usable reference) becomes an error. All other modes pass through.
+    """
+    spec = _resolve_sketch_attachment(
+        support, face, plane, body_present,
+        support_kind, face_exists, face_planar, in_body)
+    if spec["mode"] == "standalone":
+        return {"mode": "error",
+                "message": ("create_datum_plane needs a reference: pass a plane "
+                            "(XY/XZ/YZ) with body_name, or a support object "
+                            "(optionally with a face).")}
+    return spec
+
+
 _PLANE_TYPE_IDS = ("App::Plane", "PartDesign::Plane", "Part::DatumPlane")
 
 
@@ -798,6 +817,175 @@ CREATE_SKETCH = ToolDefinition(
                   required=False, default=""),
     ],
     handler=_handle_create_sketch,
+)
+
+
+# ── create_datum_plane ──────────────────────────────────────
+
+def _handle_create_datum_plane(
+    plane: str = "XY",
+    support: str = "",
+    face: str = "",
+    offset: float = 0.0,
+    body_name: str = "",
+    label: str = "",
+) -> ToolResult:
+    """Create a parametric datum plane offset from a reference."""
+    import FreeCAD as App
+
+    def do(doc):
+        warnings = []
+
+        body = None
+        if body_name:
+            body = _get_object(doc, body_name)
+            if not body:
+                hint = _suggest_similar(doc, body_name, "Body")
+                return ToolResult(success=False, output="", error=f"Body '{body_name}' not found.{hint}")
+
+        # Bare-call selection fallback — same gate as create_sketch: only when
+        # no explicit reference and the default plane were given.
+        sup, fc = support, face
+        if (not support and not face and not body_name
+                and plane.upper() == "XY"):
+            picked = _read_planar_selection()
+            if picked:
+                sup, fc = picked
+
+        sup_kind = ""
+        face_exists = face_planar = False
+        in_body = None
+        sup_obj = None
+        if sup:
+            sup_obj = _get_object(doc, sup)
+            if sup_obj is None:
+                sup_kind = "missing"
+            else:
+                sup = sup_obj.Name
+                sup_kind = _classify_support(sup_obj)
+                in_body = _owning_body_name(sup_obj, doc.Objects)
+                if fc:
+                    face_exists, face_planar = _inspect_face(sup_obj, fc)
+
+        spec = _resolve_datum_plane_attachment(
+            sup, fc, plane, body is not None,
+            sup_kind, face_exists, face_planar, in_body,
+        )
+        if spec["mode"] == "error":
+            hint = _suggest_similar(doc, support) if sup_kind == "missing" else ""
+            return ToolResult(success=False, output="", error=spec["message"] + hint)
+
+        # Choose the container the datum plane is created in (same logic as
+        # create_sketch).
+        if spec["mode"] in ("face", "plane"):
+            if body_name:
+                warnings.append("body_name ignored — datum plane placed relative to support.")
+            if spec.get("in_body"):
+                container = _get_object(doc, spec["in_body"])
+            elif sup_obj is not None and getattr(sup_obj, "TypeId", "") == "PartDesign::Body":
+                container = sup_obj
+            else:
+                container = None
+        else:  # origin
+            container = body
+
+        # PartDesign::Plane works both inside a Body (newObject) and standalone
+        # (addObject) — FreeCAD 1.1 has no separate standalone datum-plane type.
+        if container is not None:
+            datum = container.newObject("PartDesign::Plane", label or "DatumPlane")
+        else:
+            datum = doc.addObject("PartDesign::Plane", label or "DatumPlane")
+
+        # Attach to the reference. All modes use FlatFace, so the datum's local
+        # Z is the reference normal and the offset is always (0, 0, offset).
+        if spec["mode"] == "face":
+            datum.AttachmentSupport = [(sup_obj, spec["sub"])]
+            datum.MapMode = "FlatFace"
+        elif spec["mode"] == "plane":
+            datum.AttachmentSupport = [(sup_obj, "")]
+            datum.MapMode = "FlatFace"
+        elif spec["mode"] == "origin":
+            plane_feat = _get_body_plane(container, spec["plane"])
+            if plane_feat:
+                datum.AttachmentSupport = [(plane_feat, "")]
+                datum.MapMode = "FlatFace"
+            else:
+                warnings.append(
+                    f"could not resolve the {spec['plane']} origin plane — "
+                    "datum left at the document origin.")
+
+        # AttachmentOffset is in the datum's local frame, whose Z is the
+        # reference normal (FlatFace) for every mode — so (0, 0, offset) is
+        # always along the normal. (create_sketch maps origin-plane offsets to
+        # global axes for legacy reasons; the result is equivalent.)
+        if offset != 0:
+            datum.AttachmentOffset = App.Placement(
+                App.Vector(0, 0, offset), App.Rotation())
+
+        doc.recompute()
+
+        # If the attachment can't resolve, FreeCAD marks the feature's State as
+        # Invalid/Error. (The executor sandbox is the higher-level net.)
+        state = list(getattr(datum, "State", []) or [])
+        if any(s in ("Invalid", "Error") for s in state):
+            if spec.get("support"):
+                ref = spec["support"]
+            elif spec.get("plane"):
+                ref = "origin plane " + spec["plane"]
+            else:
+                ref = "reference"
+            return ToolResult(
+                success=False, output="",
+                error=(f"Failed to attach datum plane to '{ref}'"
+                       + (f":{spec['sub']}" if spec.get("sub") else "")
+                       + " — attachment did not resolve."))
+
+        return ToolResult(
+            success=True,
+            output=(("⚠ " + " ".join(warnings) + "\n" if warnings else "")
+                    + f"Created datum plane '{datum.Name}' ({datum.TypeId})."
+                    + f" Use support='{datum.Name}' in create_sketch."),
+            data={"name": datum.Name, "label": datum.Label,
+                  "type_id": datum.TypeId},
+        )
+
+    return _with_undo("Create Datum Plane", do)
+
+
+CREATE_DATUM_PLANE = ToolDefinition(
+    name="create_datum_plane",
+    description=(
+        "Create a parametric datum plane offset (parallel) from a reference — "
+        "useful as a mid-plane, an offset sketch plane, or a mirror reference. "
+        "Reference options: an origin plane (plane=XY/XZ/YZ, needs body_name); a "
+        "planar face of an object (support='Obj', face='Face6' — names from "
+        "list_faces); or an existing plane by name (support='PlaneName'). With no "
+        "reference, the current planar-face/plane selection is used. The result "
+        "is a PartDesign::Plane (inside a Body, or standalone when the reference "
+        "is not in a Body), "
+        "and can be passed to create_sketch as support='<name>'."
+    ),
+    category="modeling",
+    parameters=[
+        ToolParam("plane", "string", "Origin-plane reference: XY, XZ, or YZ "
+                  "(used when no support; needs body_name).",
+                  required=False, default="XY", enum=["XY", "XZ", "YZ"]),
+        ToolParam("support", "string", "Object to offset from: a solid (with "
+                  "`face`) or an existing plane object by name.",
+                  required=False, default=""),
+        ToolParam("face", "string", "Planar sub-element of `support`, e.g. "
+                  "'Face6' (from list_faces). Requires `support`.",
+                  required=False, default=""),
+        ToolParam("offset", "number", "Parallel offset along the reference "
+                  "normal in mm (may be negative).",
+                  required=False, default=0.0),
+        ToolParam("body_name", "string", "Body to create the PartDesign::Plane "
+                  "in (required for an origin-plane reference).",
+                  required=False, default=""),
+        ToolParam("label", "string", "Display label for the datum plane.",
+                  required=False, default=""),
+    ],
+    handler=_handle_create_datum_plane,
 )
 
 
@@ -5104,6 +5292,7 @@ ALL_TOOLS = [
     CREATE_PRIMITIVE,
     CREATE_BODY,
     CREATE_SKETCH,
+    CREATE_DATUM_PLANE,
     EDIT_SKETCH,
     PAD_SKETCH,
     POCKET_SKETCH,
