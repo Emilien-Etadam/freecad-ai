@@ -1897,6 +1897,88 @@ TRANSFORM_OBJECT = ToolDefinition(
 )
 
 
+def _duplicate_label(base_label, requested):
+    """Label for a duplicated object: the requested label, or '<base>_Copy'."""
+    return requested or f"{base_label}_Copy"
+
+
+def _handle_duplicate_object(
+    object_name: str,
+    translate_x: float = 0.0,
+    translate_y: float = 0.0,
+    translate_z: float = 0.0,
+    rotate_axis_x: float = 0.0,
+    rotate_axis_y: float = 0.0,
+    rotate_axis_z: float = 1.0,
+    rotate_angle: float = 0.0,
+    label: str = "",
+) -> ToolResult:
+    """Duplicate an object (independent parametric copy), optionally offsetting it."""
+
+    def do(doc):
+        obj = _get_object(doc, object_name)
+        if not obj:
+            hint = _suggest_similar(doc, object_name)
+            return ToolResult(success=False, output="", error=f"Object '{object_name}' not found.{hint}")
+
+        result = doc.copyObject(obj, True)
+        # copyObject returns the copy of the passed object; guard for a list/None
+        # return across FreeCAD versions (the exact shape is pinned in integration).
+        copy = result[-1] if isinstance(result, (list, tuple)) else result
+        if copy is None:
+            return ToolResult(success=False, output="", error=f"Failed to duplicate '{obj.Label}'.")
+
+        copy.Label = _duplicate_label(obj.Label, label)
+
+        if translate_x or translate_y or translate_z or rotate_angle:
+            copy.Placement = _apply_relative_placement(
+                copy.Placement, translate_x, translate_y, translate_z,
+                rotate_axis_x, rotate_axis_y, rotate_axis_z, rotate_angle)
+
+        doc.recompute()
+
+        state = list(getattr(copy, "State", []) or [])
+        if any(s in ("Invalid", "Error") for s in state):
+            return ToolResult(success=False, output="",
+                              error=f"Duplicate '{copy.Label}' did not recompute cleanly.")
+
+        return ToolResult(
+            success=True,
+            output=(f"Duplicated '{obj.Label}' → '{copy.Label}' ({copy.TypeId}); "
+                    "original unchanged."),
+            data={"name": copy.Name, "label": copy.Label},
+        )
+
+    return _with_undo("Duplicate Object", do)
+
+
+DUPLICATE_OBJECT = ToolDefinition(
+    name="duplicate_object",
+    description=(
+        "Duplicate an object as an independent, editable copy that preserves its "
+        "parametric history (the whole feature tree — e.g. a Body with its sketches "
+        "and pads). The original is left unchanged. Optional translate/rotate offset "
+        "the copy relative to the original (0 = on top of it). To duplicate a solid, "
+        "pass its Body. Note: if the object's placement is driven by an attachment "
+        "(e.g. a datum attached to an edge), the offset won't stick — duplicate a "
+        "fixed-placement object (such as a two-point datum line) for a parallel copy."
+    ),
+    category="modeling",
+    parameters=[
+        ToolParam("object_name", "string", "Internal name of the object to duplicate"),
+        ToolParam("translate_x", "number", "X offset of the copy in mm", required=False, default=0.0),
+        ToolParam("translate_y", "number", "Y offset of the copy in mm", required=False, default=0.0),
+        ToolParam("translate_z", "number", "Z offset of the copy in mm", required=False, default=0.0),
+        ToolParam("rotate_axis_x", "number", "Rotation axis X component", required=False, default=0.0),
+        ToolParam("rotate_axis_y", "number", "Rotation axis Y component", required=False, default=0.0),
+        ToolParam("rotate_axis_z", "number", "Rotation axis Z component", required=False, default=1.0),
+        ToolParam("rotate_angle", "number", "Rotation angle for the copy in degrees", required=False, default=0.0),
+        ToolParam("label", "string", "Label for the copy (default '<original>_Copy')", required=False, default=""),
+    ],
+    handler=_handle_duplicate_object,
+)
+
+
 # ── fillet_edges ────────────────────────────────────────────
 
 def _handle_fillet_edges(
@@ -5336,6 +5418,7 @@ ALL_TOOLS = [
     SWEEP_SKETCH,
     BOOLEAN_OPERATION,
     TRANSFORM_OBJECT,
+    DUPLICATE_OBJECT,
     FILLET_EDGES,
     CHAMFER_EDGES,
     CREATE_INNER_RIDGE,
