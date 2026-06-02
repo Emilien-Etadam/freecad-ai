@@ -284,6 +284,9 @@ def _resolve_sketch_attachment(support, face, plane, body_present,
       {"mode": "standalone"}
       {"mode": "error", "message": str}
     """
+    support = support or ""
+    face = face or ""
+
     if face and not support:
         return {"mode": "error", "message": "`face` requires `support`."}
 
@@ -303,10 +306,22 @@ def _resolve_sketch_attachment(support, face, plane, body_present,
                     "in_body": in_body}
         if support_kind == "plane":
             return {"mode": "plane", "support": support, "in_body": in_body}
+        if support_kind == "solid":
+            return {"mode": "error",
+                    "message": (f"`support` '{support}' is a solid; specify a `face` "
+                                "(e.g. 'Face6'), or pass a datum/origin plane as "
+                                "`support`.")}
+        # support_kind == "other" (e.g. a mesh-derived feature, a wire)
         return {"mode": "error",
-                "message": (f"`support` '{support}' is a solid; specify a `face` "
-                            "(e.g. 'Face6'), or pass a datum/origin plane as "
-                            "`support`.")}
+                "message": (f"`support` '{support}' can't host a sketch on its own; "
+                            "specify a planar `face`, or pass a datum/origin plane "
+                            "as `support`.")}
+
+    if support_kind:
+        # Unknown classification — fail loudly rather than silently falling
+        # through to standalone.
+        return {"mode": "error",
+                "message": f"Unsupported support kind '{support_kind}' for '{support}'."}
 
     # No support / no usable selection — original behavior.
     if body_present and plane.upper() in ("XY", "XZ", "YZ"):

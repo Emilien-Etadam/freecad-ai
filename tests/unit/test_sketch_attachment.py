@@ -71,3 +71,28 @@ class TestResolveSketchAttachment:
     def test_origin_plane_is_case_insensitive(self):
         spec = _resolve(plane="xy", body_present=True)
         assert spec == {"mode": "origin", "plane": "XY"}
+
+    def test_other_support_without_face_is_error_not_solid(self):
+        spec = _resolve(support="Mesh", support_kind="other")
+        assert spec["mode"] == "error"
+        assert "is a solid" not in spec["message"]
+        assert "face" in spec["message"].lower()
+
+    def test_other_support_with_planar_face_resolves_to_face_mode(self):
+        spec = _resolve(support="Mesh", face="Face2", support_kind="other",
+                        face_exists=True, face_planar=True, in_body=None)
+        assert spec == {"mode": "face", "support": "Mesh", "sub": "Face2",
+                        "in_body": None}
+
+    def test_standalone_regardless_of_plane_when_no_body(self):
+        spec = _resolve(plane="XZ", body_present=False)
+        assert spec == {"mode": "standalone"}
+
+    def test_unknown_support_kind_is_error(self):
+        spec = _resolve(support="X", support_kind="bogus")
+        assert spec["mode"] == "error"
+        assert "bogus" in spec["message"]
+
+    def test_none_face_is_treated_as_absent(self):
+        spec = _resolve(support="", face=None, plane="XY", body_present=True)
+        assert spec == {"mode": "origin", "plane": "XY"}
