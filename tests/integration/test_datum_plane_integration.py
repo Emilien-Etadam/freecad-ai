@@ -149,3 +149,48 @@ results["data"] = {"success": r.success, "error": r.error, "face": nonplanar}
         assert d["face"] is not None
         assert not d["success"]
         assert "planar" in d["error"].lower()
+
+    def test_offset_from_xz_origin_plane_is_along_normal(self, run_freecad_script):
+        result = run_freecad_script("""
+from freecad_ai.tools.freecad_tools import _handle_create_body, _handle_create_datum_plane
+
+_handle_create_body(label="Body")
+doc.recompute()
+r = _handle_create_datum_plane(plane="XZ", body_name="Body", offset=15.0)
+doc.recompute()
+dp = doc.getObject(r.data["name"]) if r.success else None
+b = dp.Placement.Base if dp else None
+results["data"] = {
+    "success": r.success,
+    "error": r.error,
+    "x": b.x if b else None,
+    "y": b.y if b else None,
+    "z": b.z if b else None,
+}
+""")
+        assert result["ok"], result.get("error")
+        d = result["data"]
+        assert d["success"], d["error"]
+        # XZ plane normal is global Y → offset moves purely along Y.
+        assert abs(d["x"]) < 1e-6
+        assert abs(d["z"]) < 1e-6
+        assert abs(abs(d["y"]) - 15.0) < 1e-6
+
+    def test_body_name_with_support_warns(self, run_freecad_script):
+        result = run_freecad_script("""
+import Part
+from freecad_ai.tools.freecad_tools import _handle_create_body, _handle_create_datum_plane
+
+_handle_create_body(label="Body")
+feat = doc.addObject("Part::Feature", "Box")
+feat.Shape = Part.makeBox(10, 10, 10)
+doc.recompute()
+
+r = _handle_create_datum_plane(support="Box", face="Face6", body_name="Body")
+doc.recompute()
+results["data"] = {"success": r.success, "error": r.error, "output": r.output}
+""")
+        assert result["ok"], result.get("error")
+        d = result["data"]
+        assert d["success"], d["error"]
+        assert "ignored" in d["output"].lower()
