@@ -18,8 +18,23 @@ QTextEdit = QtWidgets.QTextEdit
 QLabel = QtWidgets.QLabel
 QPushButton = QtWidgets.QPushButton
 QFont = QtGui.QFont
+QPalette = QtGui.QPalette
 
 from ..core.executor import ExecutionResult, execute_code, validate_code
+
+
+def _qtextedit_palette_stylesheet(palette, border_color=None):
+    """Build QTextEdit stylesheet from the active Qt palette (not hardcoded theme dict)."""
+    border = border_color or palette.color(QPalette.Mid).name()
+    return (
+        "QTextEdit { "
+        f"background-color: {palette.color(QPalette.Base).name()}; "
+        f"color: {palette.color(QPalette.Text).name()}; "
+        f"selection-background-color: {palette.color(QPalette.Highlight).name()}; "
+        f"selection-color: {palette.color(QPalette.HighlightedText).name()}; "
+        f"border: 1px solid {border}; "
+        "padding: 8px; }"
+    )
 
 
 class _FixPromptDialog(QDialog):
@@ -85,11 +100,7 @@ class _FixPromptDialog(QDialog):
         font.setStyleHint(QFont.TypeWriter)
         self.prompt_edit.setFont(font)
         self.prompt_edit.setPlainText(self._default_prompt())
-        colors = _get_theme_colors()
-        self.prompt_edit.setStyleSheet(
-            f"QTextEdit {{ background-color: {colors['code_bg']}; color: {colors['code_text']}; "
-            f"border: 1px solid {colors['tool_success_border']}; padding: 8px; }}"
-        )
+        self.prompt_edit.setStyleSheet(_qtextedit_palette_stylesheet(self.palette()))
         layout.addWidget(self.prompt_edit)
 
         btn_layout = QHBoxLayout()
@@ -99,6 +110,7 @@ class _FixPromptDialog(QDialog):
         self.cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.cancel_btn)
 
+        colors = _get_theme_colors()
         self.send_btn = QPushButton(translate("CodeReviewDialog", "Send"))
         self.send_btn.setStyleSheet(
             f"QPushButton {{ background-color: {colors['tool_success_border']}; color: white; "
@@ -149,11 +161,7 @@ class CodeReviewDialog(QDialog):
         self.code_edit.setFont(font)
         self.code_edit.setPlainText(self.code)
         self.code_edit.setReadOnly(True)
-        colors = _get_theme_colors()
-        self.code_edit.setStyleSheet(
-            f"QTextEdit {{ background-color: {colors['code_bg']}; color: {colors['code_text']}; "
-            f"border: 1px solid {colors['code_border']}; padding: 8px; }}"
-        )
+        self._apply_code_edit_style(self.code_edit)
         layout.addWidget(self.code_edit)
 
         # Result area (hidden initially)
@@ -167,6 +175,7 @@ class CodeReviewDialog(QDialog):
         self.result_text.setReadOnly(True)
         self.result_text.setMaximumHeight(150)
         self.result_text.setVisible(False)
+        self.result_text.setStyleSheet(_qtextedit_palette_stylesheet(self.palette()))
         layout.addWidget(self.result_text)
 
         # Buttons
@@ -210,23 +219,22 @@ class CodeReviewDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
+    def _apply_code_edit_style(self, text_edit, *, editable=False):
+        """Style a code QTextEdit from this dialog's active palette."""
+        border = None
+        if editable:
+            border = self.palette().color(QPalette.Highlight).name()
+        text_edit.setStyleSheet(_qtextedit_palette_stylesheet(self.palette(), border))
+
     def _toggle_edit(self):
         """Toggle code editor between read-only and editable."""
         self._editable = not self._editable
         self.code_edit.setReadOnly(not self._editable)
-        colors = _get_theme_colors()
         if self._editable:
             self.edit_btn.setText(translate("CodeReviewDialog", "Lock"))
-            self.code_edit.setStyleSheet(
-                f"QTextEdit {{ background-color: {colors['code_bg']}; color: {colors['code_text']}; "
-                f"border: 1px solid {colors['tool_success_border']}; padding: 8px; }}"
-            )
         else:
             self.edit_btn.setText(translate("CodeReviewDialog", "Edit"))
-            self.code_edit.setStyleSheet(
-                f"QTextEdit {{ background-color: {colors['code_bg']}; color: {colors['code_text']}; "
-                f"border: 1px solid {colors['code_border']}; padding: 8px; }}"
-            )
+        self._apply_code_edit_style(self.code_edit, editable=self._editable)
 
     def _render_result(self, result, success_msg, failure_msg):
         """Render an ExecutionResult into the shared result widgets."""
