@@ -1922,8 +1922,10 @@ def _handle_duplicate_object(
             return ToolResult(success=False, output="", error=f"Object '{object_name}' not found.{hint}")
 
         result = doc.copyObject(obj, True)
-        # copyObject returns the copy of the passed object; guard for a list/None
-        # return across FreeCAD versions (the exact shape is pinned in integration).
+        # copyObject(single_obj, True) returns a plain DocumentObject on FreeCAD
+        # 1.1.x; the list/tuple branch is a forward-compat guard. [-1] is chosen
+        # because topological order places the most-derived object (e.g. the Body)
+        # last. Pinned by integration.
         copy = result[-1] if isinstance(result, (list, tuple)) else result
         if copy is None:
             return ToolResult(success=False, output="", error=f"Failed to duplicate '{obj.Label}'.")
@@ -1937,6 +1939,9 @@ def _handle_duplicate_object(
 
         doc.recompute()
 
+        # If the copy can't recompute cleanly, State contains Invalid/Error. (For a
+        # Body only the Body-level state is checked here; the executor sandbox
+        # catches child-level failures as the higher-level net.)
         state = list(getattr(copy, "State", []) or [])
         if any(s in ("Invalid", "Error") for s in state):
             return ToolResult(success=False, output="",
