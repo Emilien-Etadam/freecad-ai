@@ -10,6 +10,7 @@ Safety layers:
   4. Auto-save — save document before execution so crashes don't lose work
 """
 
+import inspect
 import io
 import json
 import os
@@ -76,6 +77,39 @@ def _find_freecad_cmd() -> str:
     return ""
 
 
+def _collect_object_issues(objects_state, baseline_bad):
+    """Return post-execution validation issues the executed code is responsible for.
+
+    ``objects_state`` is a list of ``{"name", "null", "invalid", "invalid_state"}``
+    dicts captured AFTER the user code ran. ``baseline_bad`` is the set of object
+    names that already had a problem (null/invalid shape or Invalid state) BEFORE
+    it ran.
+
+    Objects already broken in the baseline are suppressed: the code didn't
+    introduce their invalidity, so it must not be blamed for it. An STL imported
+    and converted to a solid yields an OCC-invalid Part::Feature, and the sandbox
+    dry-runs against a copy of the saved document — so that invalid solid is
+    present on every run. Reporting it failed unrelated code (e.g. a sketch on a
+    selected face) and sent the model chasing a phantom bug across all retries.
+
+    Only new objects (names absent from ``baseline_bad``) or objects the code
+    newly broke are reported. The shape source of truth lives here so the
+    subprocess harness and the unit tests exercise identical logic.
+    """
+    issues = []
+    for st in objects_state:
+        name = st["name"]
+        if name in baseline_bad:
+            continue
+        if st.get("null"):
+            issues.append("Object '" + name + "' has null shape")
+        elif st.get("invalid"):
+            issues.append("Object '" + name + "' has invalid shape")
+        if st.get("invalid_state"):
+            issues.append("Object '" + name + "' is in Invalid state")
+    return issues
+
+
 def _sandbox_test(code: str, timeout: int = 15, document_path: str | None = None) -> tuple:
     """Test code in a headless FreeCAD subprocess.
 
@@ -107,6 +141,7 @@ def _sandbox_test(code: str, timeout: int = 15, document_path: str | None = None
     #      PositionBySupport attachment failures, topological naming mismatches)
     #   2. Features that build a null/invalid Shape without raising
     harness = '''import sys, json, traceback
+{collect_fn_src}
 result = {{"ok": False, "error": ""}}
 try:
     import FreeCAD as App
@@ -140,14 +175,42 @@ try:
     except ImportError:
         pass
 {open_block}
+
+    # Per-object problem snapshot — shared by the baseline (pre-code) and the
+    # post-execution walk so both judge invalidity identically.
+    def _snap(_obj):
+        _null = False
+        _invalid = False
+        _shape = getattr(_obj, "Shape", None)
+        if _shape is not None:
+            try:
+                _null = bool(_shape.isNull())
+                _invalid = (not _null) and (not _shape.isValid())
+            except Exception:
+                pass
+        _state = getattr(_obj, "State", None)
+        _bad_state = bool(_state and "Invalid" in _state)
+        return {{"name": _obj.Name, "null": _null,
+                 "invalid": _invalid, "invalid_state": _bad_state}}
+
+    # Baseline: objects already broken in the opened document BEFORE user code
+    # runs. The sandbox dry-runs against a copy of the saved document, so an
+    # imported-and-converted mesh→solid that OCC considers invalid is present
+    # on every run; without this snapshot it would fail unrelated code.
+    _baseline_bad = set()
+    for _obj in doc.Objects:
+        _s = _snap(_obj)
+        if _s["null"] or _s["invalid"] or _s["invalid_state"]:
+            _baseline_bad.add(_s["name"])
+
     # --- user code ---
 {indented_code}
     # --- end user code ---
     doc.recompute()
 
-    # Post-execution validation: collect console errors + walk objects for
-    # null/invalid shapes. Either signal means the code "ran" but broke the
-    # model — exactly the case where Python-exception-only checking fails.
+    # Post-execution validation: collect console errors + flag only the shapes
+    # this code created or newly broke. Either signal means the code "ran" but
+    # broke the model — the case where Python-exception-only checking fails.
     _issues = []
     if _observer_installed:
         # De-dup — C++ logs the same error per failed recompute iteration
@@ -156,19 +219,8 @@ try:
             if _e and _e not in _seen:
                 _seen.add(_e)
                 _issues.append("FreeCAD error: " + _e)
-    for _obj in doc.Objects:
-        _shape = getattr(_obj, "Shape", None)
-        if _shape is not None:
-            try:
-                if _shape.isNull():
-                    _issues.append("Object '" + _obj.Name + "' has null shape")
-                elif not _shape.isValid():
-                    _issues.append("Object '" + _obj.Name + "' has invalid shape")
-            except Exception:
-                pass
-        _state = getattr(_obj, "State", None)
-        if _state and "Invalid" in _state:
-            _issues.append("Object '" + _obj.Name + "' is in Invalid state")
+    _objects_state = [_snap(_obj) for _obj in doc.Objects]
+    _issues.extend(_collect_object_issues(_objects_state, _baseline_bad))
 
     if _issues:
         result["error"] = "Post-execution validation found issues:\\n" + "\\n".join(_issues)
@@ -186,6 +238,7 @@ finally:
     with open({result_path!r}, "w") as f:
         json.dump(result, f)
 '''.format(
+        collect_fn_src=inspect.getsource(_collect_object_issues),
         open_block=open_block,
         indented_code="\n".join("    " + line for line in code.splitlines()),
         result_path=result_file,
