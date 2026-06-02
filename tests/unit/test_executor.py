@@ -254,3 +254,76 @@ class TestSandboxTimeout:
             "sandbox dry-run was throttled below the configured execution "
             "timeout — slow-but-valid code will falsely time out"
         )
+
+
+class TestCollectObjectIssues:
+    """Post-execution validation must blame the code only for shapes it
+    created or newly broke — never for objects that were already invalid
+    before the code ran.
+
+    Issue: an STL imported and converted to a solid yields an OCC-invalid
+    Part::Feature. The sandbox opens a copy of the saved document, so that
+    pre-existing invalid solid is present on every dry-run. The validator
+    used to walk *all* objects and report it, failing code (e.g. a sketch on
+    a selected face) that never touched the solid — sending the model to
+    chase a phantom bug across all retries.
+    """
+
+    def test_preexisting_invalid_shape_is_suppressed(self):
+        # The imported mesh→solid was already invalid before the code ran.
+        objects_state = [
+            {"name": "roundedBox_solid", "null": False,
+             "invalid": True, "invalid_state": False},
+        ]
+        baseline_bad = {"roundedBox_solid"}
+        issues = executor._collect_object_issues(objects_state, baseline_bad)
+        assert issues == [], (
+            "code that never touched a pre-existing invalid object must not "
+            "be blamed for it"
+        )
+
+    def test_newly_created_invalid_object_is_reported(self):
+        # A brand-new object the code created has a broken shape — its fault.
+        objects_state = [
+            {"name": "roundedBox_solid", "null": False,
+             "invalid": True, "invalid_state": False},
+            {"name": "SnapFitBox", "null": False,
+             "invalid": True, "invalid_state": False},
+        ]
+        baseline_bad = {"roundedBox_solid"}
+        issues = executor._collect_object_issues(objects_state, baseline_bad)
+        assert issues == ["Object 'SnapFitBox' has invalid shape"]
+
+    def test_object_newly_broken_by_code_is_reported(self):
+        # Object existed and was fine before; the code broke it.
+        objects_state = [
+            {"name": "Pad", "null": False,
+             "invalid": True, "invalid_state": False},
+        ]
+        baseline_bad = set()  # Pad was valid before the code ran
+        issues = executor._collect_object_issues(objects_state, baseline_bad)
+        assert issues == ["Object 'Pad' has invalid shape"]
+
+    def test_null_shape_on_new_object_is_reported(self):
+        objects_state = [
+            {"name": "Pocket", "null": True,
+             "invalid": False, "invalid_state": False},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == ["Object 'Pocket' has null shape"]
+
+    def test_invalid_state_on_new_object_is_reported(self):
+        objects_state = [
+            {"name": "Sketch", "null": False,
+             "invalid": False, "invalid_state": True},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == ["Object 'Sketch' is in Invalid state"]
+
+    def test_valid_object_never_reported(self):
+        objects_state = [
+            {"name": "Box", "null": False,
+             "invalid": False, "invalid_state": False},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == []
