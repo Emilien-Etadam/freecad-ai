@@ -348,6 +348,81 @@ def _resolve_datum_plane_attachment(support, face, plane, body_present,
     return spec
 
 
+_DATUM_LINE_MODE_ERR = (
+    "Specify exactly one of: two points (point1+point2), an edge "
+    "(support+edge), or an origin axis (axis).")
+
+
+def _resolve_datum_line_def(point1, point2, support, edge, axis,
+                            body_present, support_kind, edge_exists,
+                            edge_straight, in_body):
+    """Decide how a datum line is defined. Pure — no FreeCAD calls.
+
+    Exactly one mode's inputs must be supplied. ``support_kind`` is ``""`` |
+    ``"missing"`` | ``"plane"`` | ``"solid"`` | ``"other"`` (only ``"missing"``
+    changes the outcome — any found object can host an edge). ``edge_exists`` /
+    ``edge_straight`` matter only when ``edge`` != "". ``in_body`` is the
+    support's owning Body name or ``None``.
+
+    Returns one of:
+      {"mode": "points", "p1": [x,y,z], "p2": [x,y,z]}
+      {"mode": "edge", "support": str, "sub": str, "in_body": str|None}
+      {"mode": "origin", "axis": "X"|"Y"|"Z"}
+      {"mode": "error", "message": str}
+    """
+    point1 = list(point1) if point1 else []
+    point2 = list(point2) if point2 else []
+    support = support or ""
+    edge = edge or ""
+    axis = (axis or "").upper()
+
+    has_points = bool(point1) or bool(point2)
+    has_edge = bool(support) or bool(edge)
+    has_axis = bool(axis)
+
+    if sum([has_points, has_edge, has_axis]) != 1:
+        return {"mode": "error", "message": _DATUM_LINE_MODE_ERR}
+
+    if has_points:
+        if len(point1) != 3 or len(point2) != 3:
+            return {"mode": "error",
+                    "message": "Two-points mode needs point1 and point2 as "
+                               "[x, y, z]."}
+        d2 = sum((a - b) ** 2 for a, b in zip(point1, point2))
+        if d2 < 1e-14:
+            return {"mode": "error",
+                    "message": "point1 and point2 are coincident; a line needs "
+                               "two distinct points."}
+        return {"mode": "points", "p1": point1, "p2": point2}
+
+    if has_edge:
+        if not support:
+            return {"mode": "error", "message": "`edge` requires `support`."}
+        if not edge:
+            return {"mode": "error",
+                    "message": "`support` requires an `edge` (e.g. 'Edge3')."}
+        if support_kind == "missing":
+            return {"mode": "error", "message": f"Object '{support}' not found."}
+        if not edge_exists:
+            return {"mode": "error",
+                    "message": f"Edge '{edge}' not found on '{support}'."}
+        if not edge_straight:
+            return {"mode": "error",
+                    "message": (f"Edge '{edge}' on '{support}' is not straight; "
+                                "a datum line needs a straight edge.")}
+        return {"mode": "edge", "support": support, "sub": edge,
+                "in_body": in_body}
+
+    # has_axis
+    if axis not in ("X", "Y", "Z"):
+        return {"mode": "error", "message": "axis must be X, Y, or Z."}
+    if not body_present:
+        return {"mode": "error",
+                "message": "axis mode needs body_name (origin axes belong to a "
+                           "Body)."}
+    return {"mode": "origin", "axis": axis}
+
+
 _PLANE_TYPE_IDS = ("App::Plane", "PartDesign::Plane", "Part::DatumPlane")
 
 
