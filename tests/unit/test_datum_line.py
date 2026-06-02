@@ -106,3 +106,27 @@ class TestResolveDatumLineDef:
         spec = _resolve()
         assert spec["mode"] == "error"
         assert "exactly one" in spec["message"].lower()
+
+
+from freecad_ai.tools.freecad_tools import CREATE_DATUM_LINE, ALL_TOOLS
+
+
+class TestCreateDatumLineDefinition:
+    def test_name_and_category(self):
+        assert CREATE_DATUM_LINE.name == "create_datum_line"
+        assert CREATE_DATUM_LINE.category == "modeling"
+
+    def test_registered_in_all_tools(self):
+        assert CREATE_DATUM_LINE in ALL_TOOLS
+
+    def test_array_params_declare_items(self):
+        # GitHub Models rejects array params declared without `items` (issue #10).
+        for p in CREATE_DATUM_LINE.parameters:
+            if getattr(p, "type", None) == "array":
+                assert getattr(p, "items", None) is not None, p.name
+
+    def test_point_params_are_number_arrays(self):
+        params = {p.name: p for p in CREATE_DATUM_LINE.parameters}
+        for name in ("point1", "point2"):
+            assert params[name].type == "array"
+            assert params[name].items == {"type": "number"}
