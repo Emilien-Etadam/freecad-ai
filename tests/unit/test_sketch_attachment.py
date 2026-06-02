@@ -1,0 +1,73 @@
+"""Unit tests for the pure create_sketch attachment resolver (no FreeCAD)."""
+
+from freecad_ai.tools.freecad_tools import _resolve_sketch_attachment
+
+
+def _resolve(**kw):
+    base = dict(
+        support="", face="", plane="XY", body_present=False,
+        support_kind="", face_exists=False, face_planar=False, in_body=None,
+    )
+    base.update(kw)
+    return _resolve_sketch_attachment(**base)
+
+
+class TestResolveSketchAttachment:
+    # --- explicit face ---
+    def test_planar_face_on_solid_resolves_to_face_mode(self):
+        spec = _resolve(support="Box", face="Face6", support_kind="solid",
+                        face_exists=True, face_planar=True, in_body="Body")
+        assert spec == {"mode": "face", "support": "Box", "sub": "Face6",
+                        "in_body": "Body"}
+
+    def test_face_on_standalone_solid_has_no_body(self):
+        spec = _resolve(support="Imported", face="Face3", support_kind="solid",
+                        face_exists=True, face_planar=True, in_body=None)
+        assert spec["mode"] == "face"
+        assert spec["in_body"] is None
+
+    def test_missing_face_is_error(self):
+        spec = _resolve(support="Box", face="Face99", support_kind="solid",
+                        face_exists=False)
+        assert spec["mode"] == "error"
+        assert "Face99" in spec["message"]
+
+    def test_non_planar_face_is_error(self):
+        spec = _resolve(support="Cyl", face="Face1", support_kind="solid",
+                        face_exists=True, face_planar=False)
+        assert spec["mode"] == "error"
+        assert "planar" in spec["message"].lower()
+
+    # --- explicit plane ---
+    def test_plane_support_without_face_resolves_to_plane_mode(self):
+        spec = _resolve(support="DatumPlane", support_kind="plane", in_body="Body")
+        assert spec == {"mode": "plane", "support": "DatumPlane", "in_body": "Body"}
+
+    # --- validation ---
+    def test_face_without_support_is_error(self):
+        spec = _resolve(face="Face6")  # support empty
+        assert spec["mode"] == "error"
+        assert "support" in spec["message"].lower()
+
+    def test_missing_support_is_error(self):
+        spec = _resolve(support="Nope", support_kind="missing")
+        assert spec["mode"] == "error"
+        assert "not found" in spec["message"].lower()
+
+    def test_solid_support_without_face_is_error(self):
+        spec = _resolve(support="Box", support_kind="solid")
+        assert spec["mode"] == "error"
+        assert "face" in spec["message"].lower()
+
+    # --- fall-through to current behavior ---
+    def test_no_support_with_body_and_origin_plane(self):
+        spec = _resolve(plane="XZ", body_present=True)
+        assert spec == {"mode": "origin", "plane": "XZ"}
+
+    def test_no_support_no_body_is_standalone(self):
+        spec = _resolve(plane="XY", body_present=False)
+        assert spec == {"mode": "standalone"}
+
+    def test_origin_plane_is_case_insensitive(self):
+        spec = _resolve(plane="xy", body_present=True)
+        assert spec == {"mode": "origin", "plane": "XY"}

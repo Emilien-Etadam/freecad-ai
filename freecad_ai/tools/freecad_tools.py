@@ -263,6 +263,57 @@ CREATE_BODY = ToolDefinition(
 )
 
 
+def _resolve_sketch_attachment(support, face, plane, body_present,
+                               support_kind, face_exists, face_planar, in_body):
+    """Decide where a sketch attaches. Pure — no FreeCAD calls.
+
+    Inputs are already-inspected facts so this is unit-testable. When the
+    GUI-selection fallback is used, the caller passes the selected object as
+    ``support`` and its planar face as ``face`` — selection collapses into the
+    same inputs as the explicit params.
+
+    ``support_kind``: ``""`` (no support given and no usable selection),
+    else ``"missing"`` | ``"plane"`` | ``"solid"`` | ``"other"``.
+    ``face_exists`` / ``face_planar`` are meaningful only when ``face`` != "".
+    ``in_body`` is the Body name owning the support, or ``None``.
+
+    Returns one of:
+      {"mode": "face", "support": str, "sub": str, "in_body": str|None}
+      {"mode": "plane", "support": str, "in_body": str|None}
+      {"mode": "origin", "plane": str}
+      {"mode": "standalone"}
+      {"mode": "error", "message": str}
+    """
+    if face and not support:
+        return {"mode": "error", "message": "`face` requires `support`."}
+
+    if support_kind == "missing":
+        return {"mode": "error", "message": f"Object '{support}' not found."}
+
+    if support_kind in ("plane", "solid", "other"):
+        if face:
+            if not face_exists:
+                return {"mode": "error",
+                        "message": f"Face '{face}' not found on '{support}'."}
+            if not face_planar:
+                return {"mode": "error",
+                        "message": (f"Face '{face}' on '{support}' is not planar; "
+                                    "sketches need a planar face.")}
+            return {"mode": "face", "support": support, "sub": face,
+                    "in_body": in_body}
+        if support_kind == "plane":
+            return {"mode": "plane", "support": support, "in_body": in_body}
+        return {"mode": "error",
+                "message": (f"`support` '{support}' is a solid; specify a `face` "
+                            "(e.g. 'Face6'), or pass a datum/origin plane as "
+                            "`support`.")}
+
+    # No support / no usable selection — original behavior.
+    if body_present and plane.upper() in ("XY", "XZ", "YZ"):
+        return {"mode": "origin", "plane": plane.upper()}
+    return {"mode": "standalone"}
+
+
 # ── create_sketch ───────────────────────────────────────────
 
 def _handle_create_sketch(
