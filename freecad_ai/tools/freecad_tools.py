@@ -329,6 +329,25 @@ def _resolve_sketch_attachment(support, face, plane, body_present,
     return {"mode": "standalone"}
 
 
+def _resolve_datum_plane_attachment(support, face, plane, body_present,
+                                    support_kind, face_exists, face_planar, in_body):
+    """Reference resolution for create_datum_plane. Pure — no FreeCAD calls.
+
+    Delegates to ``_resolve_sketch_attachment`` and remaps the one datum-specific
+    decision: a datum plane cannot be free-floating, so a ``standalone`` result
+    (no usable reference) becomes an error. All other modes pass through.
+    """
+    spec = _resolve_sketch_attachment(
+        support, face, plane, body_present,
+        support_kind, face_exists, face_planar, in_body)
+    if spec["mode"] == "standalone":
+        return {"mode": "error",
+                "message": ("create_datum_plane needs a reference: pass a plane "
+                            "(XY/XZ/YZ) with body_name, or a support object "
+                            "(optionally with a face).")}
+    return spec
+
+
 _PLANE_TYPE_IDS = ("App::Plane", "PartDesign::Plane", "Part::DatumPlane")
 
 
