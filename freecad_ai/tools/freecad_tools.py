@@ -1156,12 +1156,12 @@ def _handle_create_datum_line(
 
         if spec["mode"] == "edge":
             line.AttachmentSupport = [(sup_obj, spec["sub"])]
-            line.MapMode = "OneEdge"
+            line.MapMode = "Tangent"
         elif spec["mode"] == "origin":
             axis_feat = _get_body_axis(container, spec["axis"])
             if axis_feat:
                 line.AttachmentSupport = [(axis_feat, "")]
-                line.MapMode = "OneEdge"
+                line.MapMode = "Tangent"
             else:
                 warnings.append(
                     f"could not resolve the {spec['axis']} origin axis — datum "
@@ -1170,8 +1170,8 @@ def _handle_create_datum_line(
             p1 = App.Vector(*spec["p1"])
             p2 = App.Vector(*spec["p2"])
             direction = p2.sub(p1)
-            # PartDesign::Line lies along its local Z; FlatFace/OneEdge use the
-            # placement's Z. Orient local Z onto the p1→p2 direction.
+            # PartDesign::Line lies along its local Z; orient local Z onto the
+            # p1→p2 direction (no attachment in two-points mode).
             line.Placement = App.Placement(
                 p1, App.Rotation(App.Vector(0, 0, 1), direction))
             if hasattr(line, "Length"):
