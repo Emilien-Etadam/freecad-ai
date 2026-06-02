@@ -263,6 +263,169 @@ CREATE_BODY = ToolDefinition(
 )
 
 
+def _resolve_sketch_attachment(support, face, plane, body_present,
+                               support_kind, face_exists, face_planar, in_body):
+    """Decide where a sketch attaches. Pure — no FreeCAD calls.
+
+    Inputs are already-inspected facts so this is unit-testable. When the
+    GUI-selection fallback is used, the caller passes the selected object as
+    ``support`` and its planar face as ``face`` — selection collapses into the
+    same inputs as the explicit params.
+
+    ``support_kind``: ``""`` (no support given and no usable selection),
+    else ``"missing"`` | ``"plane"`` | ``"solid"`` | ``"other"``.
+    ``face_exists`` / ``face_planar`` are meaningful only when ``face`` != "".
+    ``in_body`` is the Body name owning the support, or ``None``.
+
+    Returns one of:
+      {"mode": "face", "support": str, "sub": str, "in_body": str|None}
+      {"mode": "plane", "support": str, "in_body": str|None}
+      {"mode": "origin", "plane": str}
+      {"mode": "standalone"}
+      {"mode": "error", "message": str}
+    """
+    support = support or ""
+    face = face or ""
+
+    if face and not support:
+        return {"mode": "error", "message": "`face` requires `support`."}
+
+    if support_kind == "missing":
+        return {"mode": "error", "message": f"Object '{support}' not found."}
+
+    if support_kind in ("plane", "solid", "other"):
+        if face:
+            if not face_exists:
+                return {"mode": "error",
+                        "message": f"Face '{face}' not found on '{support}'."}
+            if not face_planar:
+                return {"mode": "error",
+                        "message": (f"Face '{face}' on '{support}' is not planar; "
+                                    "sketches need a planar face.")}
+            return {"mode": "face", "support": support, "sub": face,
+                    "in_body": in_body}
+        if support_kind == "plane":
+            return {"mode": "plane", "support": support, "in_body": in_body}
+        if support_kind == "solid":
+            return {"mode": "error",
+                    "message": (f"`support` '{support}' is a solid; specify a `face` "
+                                "(e.g. 'Face6'), or pass a datum/origin plane as "
+                                "`support`.")}
+        # support_kind == "other" (e.g. a mesh-derived feature, a wire)
+        return {"mode": "error",
+                "message": (f"`support` '{support}' can't host a sketch on its own; "
+                            "specify a planar `face`, or pass a datum/origin plane "
+                            "as `support`.")}
+
+    if support_kind:
+        # Unknown classification — fail loudly rather than silently falling
+        # through to standalone.
+        return {"mode": "error",
+                "message": f"Unsupported support kind '{support_kind}' for '{support}'."}
+
+    # No support / no usable selection — original behavior.
+    if body_present and plane.upper() in ("XY", "XZ", "YZ"):
+        return {"mode": "origin", "plane": plane.upper()}
+    return {"mode": "standalone"}
+
+
+_PLANE_TYPE_IDS = ("App::Plane", "PartDesign::Plane", "Part::DatumPlane")
+
+
+def _classify_support(obj):
+    """Classify a support object for sketch attachment.
+
+    Returns 'plane' for origin/datum planes, 'solid' for shapes with solids,
+    'other' for everything else (sketches, wires, empty features).
+    """
+    if getattr(obj, "TypeId", "") in _PLANE_TYPE_IDS:
+        return "plane"
+    shape = getattr(obj, "Shape", None)
+    try:
+        if shape is not None and shape.Solids:
+            return "solid"
+    except Exception:
+        pass
+    return "other"
+
+
+def _owning_body_name(obj, objects):
+    """Return the Name of the PartDesign::Body that contains ``obj``, or None.
+
+    ``objects`` is an iterable of document objects (e.g. ``doc.Objects``). A Body lists
+    its children in ``.Group``.
+
+    See also ``_find_body_for``, which returns the Body object itself.
+    """
+    for cand in objects:
+        if getattr(cand, "TypeId", "") != "PartDesign::Body":
+            continue
+        try:
+            if any(getattr(c, "Name", None) == obj.Name for c in cand.Group):
+                return cand.Name
+        except Exception:
+            pass
+    return None
+
+
+def _inspect_face(obj, face_name):
+    """Return (exists, planar) for ``face_name`` on ``obj``'s shape.
+
+    Never raises — a missing face, unavailable Part module, or non-shape object
+    yields (False, False).
+    """
+    try:
+        import Part
+    except Exception:
+        return (False, False)
+    try:
+        face = obj.Shape.getElement(face_name)
+    except Exception:
+        return (False, False)
+    if face is None or face.ShapeType != "Face":
+        return (False, False)
+    try:
+        return (True, isinstance(face.Surface, Part.Plane))
+    except Exception:
+        return (True, False)
+
+
+def _read_planar_selection():
+    """Return (object_name, sub_element) for the first usable planar-face or
+    plane selection in the GUI, or None.
+
+    Used as a fallback when create_sketch is called with no support/face. Any
+    error or non-usable selection (edge, vertex, nothing, non-planar face)
+    returns None so the caller falls through to default behavior.
+    """
+    try:
+        import FreeCADGui as Gui
+        import Part
+    except Exception:
+        return None
+    try:
+        sel = Gui.Selection.getSelectionEx()
+    except Exception:
+        return None
+    for s in sel or []:
+        obj = getattr(s, "Object", None)
+        if obj is None:
+            continue
+        subs = getattr(s, "SubElementNames", None) or []
+        if subs:
+            for sub in subs:
+                try:
+                    el = obj.Shape.getElement(sub)
+                    if (el is not None and el.ShapeType == "Face"
+                            and isinstance(el.Surface, Part.Plane)):
+                        return (obj.Name, sub)
+                except Exception:
+                    continue
+        elif getattr(obj, "TypeId", "") in _PLANE_TYPE_IDS:
+            return (obj.Name, "")
+    return None
+
+
 # ── create_sketch ───────────────────────────────────────────
 
 def _handle_create_sketch(
@@ -272,6 +435,8 @@ def _handle_create_sketch(
     constraints: list | None = None,
     label: str = "",
     offset: float = 0.0,
+    support: str = "",
+    face: str = "",
 ) -> ToolResult:
     """Create a sketch with geometry and constraints."""
     import FreeCAD as App
@@ -279,6 +444,8 @@ def _handle_create_sketch(
     import Sketcher
 
     def do(doc):
+        warnings = []
+
         body = None
         if body_name:
             body = _get_object(doc, body_name)
@@ -286,29 +453,106 @@ def _handle_create_sketch(
                 hint = _suggest_similar(doc, body_name, "Body")
                 return ToolResult(success=False, output="", error=f"Body '{body_name}' not found.{hint}")
 
-        if body:
-            sketch = body.newObject("Sketcher::SketchObject", label or "Sketch")
+        # Gather attachment facts from explicit params, or fall back to the GUI
+        # selection when neither support nor face was given.
+        sup, fc = support, face
+        # Only consult the viewport selection for a bare call. An explicit
+        # plane, body_name, support, or face signals intent and must not be
+        # silently overridden by whatever happens to be selected (preserves
+        # backward compatibility for create_sketch(plane=..., body_name=...)).
+        if (not support and not face and not body_name
+                and plane.upper() == "XY"):
+            picked = _read_planar_selection()
+            if picked:
+                sup, fc = picked
+
+        sup_kind = ""
+        face_exists = face_planar = False
+        in_body = None
+        sup_obj = None
+        if sup:
+            sup_obj = _get_object(doc, sup)
+            if sup_obj is None:
+                sup_kind = "missing"
+            else:
+                sup = sup_obj.Name
+                sup_kind = _classify_support(sup_obj)
+                in_body = _owning_body_name(sup_obj, doc.Objects)
+                if fc:
+                    face_exists, face_planar = _inspect_face(sup_obj, fc)
+
+        spec = _resolve_sketch_attachment(
+            sup, fc, plane, body is not None,
+            sup_kind, face_exists, face_planar, in_body,
+        )
+        if spec["mode"] == "error":
+            hint = _suggest_similar(doc, support) if sup_kind == "missing" else ""
+            return ToolResult(success=False, output="", error=spec["message"] + hint)
+
+        # Choose the container the sketch is created in.
+        if spec["mode"] in ("face", "plane"):
+            if body_name:
+                warnings.append("body_name ignored — sketch placed relative to support.")
+            if spec.get("in_body"):
+                container = _get_object(doc, spec["in_body"])
+            elif sup_obj is not None and getattr(sup_obj, "TypeId", "") == "PartDesign::Body":
+                # Sketching on a Body's own face → keep the sketch inside it.
+                container = sup_obj
+            else:
+                container = None
+        elif spec["mode"] == "origin":
+            container = body
+        else:  # standalone
+            container = body
+
+        if container is not None:
+            sketch = container.newObject("Sketcher::SketchObject", label or "Sketch")
         else:
             sketch = doc.addObject("Sketcher::SketchObject", label or "Sketch")
 
-        # Attach to plane
-        if body and plane.upper() in ("XY", "XZ", "YZ"):
-            plane_feat = _get_body_plane(body, plane.upper())
+        # Apply the attachment. sup_obj is the resolved support object (non-None
+        # whenever the resolver returned a face/plane mode).
+        if spec["mode"] == "face":
+            sketch.AttachmentSupport = [(sup_obj, spec["sub"])]
+            sketch.MapMode = "FlatFace"
+        elif spec["mode"] == "plane":
+            sketch.AttachmentSupport = [(sup_obj, "")]
+            sketch.MapMode = "FlatFace"
+        elif spec["mode"] == "origin":
+            plane_feat = _get_body_plane(container, spec["plane"])
             if plane_feat:
                 sketch.AttachmentSupport = [(plane_feat, "")]
                 sketch.MapMode = "FlatFace"
 
-        # Offset the sketch along the plane normal
+        # Offset along the attachment normal. For face/plane attachments the
+        # sketch's local Z is the face/plane normal, so offset is (0,0,offset).
+        # For origin planes keep the explicit per-plane vector.
         if offset != 0:
-            offset_map = {
-                "XY": App.Vector(0, 0, offset),
-                "XZ": App.Vector(0, offset, 0),
-                "YZ": App.Vector(offset, 0, 0),
-            }
-            ovec = offset_map.get(plane.upper(), App.Vector(0, 0, offset))
-            sketch.AttachmentOffset = App.Placement(ovec, App.Rotation())
+            if spec["mode"] in ("face", "plane"):
+                sketch.AttachmentOffset = App.Placement(
+                    App.Vector(0, 0, offset), App.Rotation())
+            else:
+                offset_map = {
+                    "XY": App.Vector(0, 0, offset),
+                    "XZ": App.Vector(0, offset, 0),
+                    "YZ": App.Vector(offset, 0, 0),
+                }
+                ovec = offset_map.get(plane.upper(), App.Vector(0, 0, offset))
+                sketch.AttachmentOffset = App.Placement(ovec, App.Rotation())
 
         doc.recompute()
+
+        # If a face/plane attachment can't resolve, FreeCAD marks the sketch's
+        # State as Invalid/Error after recompute. (The executor sandbox is the
+        # higher-level net — it also captures the C++ PositionBySupport error.)
+        if spec["mode"] in ("face", "plane"):
+            state = list(getattr(sketch, "State", []) or [])
+            if any(s in ("Invalid", "Error") for s in state):
+                return ToolResult(
+                    success=False, output="",
+                    error=(f"Failed to attach sketch to '{spec['support']}'"
+                           + (f":{spec['sub']}" if spec.get("sub") else "")
+                           + " — attachment did not resolve."))
 
         geo_count = 0
         if geometries:
@@ -490,10 +734,12 @@ def _handle_create_sketch(
 
         return ToolResult(
             success=True,
-            output=(f"Created sketch '{sketch.Name}' with {geo_count} geometries"
-                    f" and {constraint_count} constraints.{constraint_status}"
-                    f"{constraint_info}"
-                    f"\nUse sketch_name='{sketch.Name}' in pad_sketch/pocket_sketch."),
+            output=(
+                ("⚠ " + " ".join(warnings) + "\n" if warnings else "")
+                + f"Created sketch '{sketch.Name}' with {geo_count} geometries"
+                f" and {constraint_count} constraints.{constraint_status}"
+                f"{constraint_info}"
+                f"\nUse sketch_name='{sketch.Name}' in pad_sketch/pocket_sketch."),
             data={"name": sketch.Name, "label": sketch.Label,
                   "geometry_count": geo_count, "constraint_count": constraint_count,
                   "constraints": constraint_details,
@@ -516,6 +762,10 @@ CREATE_SKETCH = ToolDefinition(
         "they are already constrained by the coordinates and dimensions you provide. "
         "COORDINATE SYSTEM: FreeCAD sketches use Y-up. When converting from SVG, images, "
         "or screen coordinates (which use Y-down), negate all Y values."
+        " To sketch on an existing solid's planar face, pass support='Obj' and "
+        "face='Face6' (use list_faces to find the name); to sketch on a datum "
+        "plane pass support='PlaneName'. Without support, attaches to the origin "
+        "`plane` (XY/XZ/YZ) as before."
     ),
     category="modeling",
     parameters=[
@@ -535,6 +785,17 @@ CREATE_SKETCH = ToolDefinition(
                   required=False, items={"type": "object"}),
         ToolParam("label", "string", "Display label for the sketch", required=False, default=""),
         ToolParam("offset", "number", "Offset the sketch along the plane normal (e.g. offset=40 on XY places sketch at z=40)", required=False, default=0.0),
+        ToolParam("support", "string",
+                  "Object to attach the sketch to: a solid (with `face`) or a "
+                  "datum/origin plane object (by name). Overrides `plane`. If "
+                  "omitted and a planar face/plane is selected in the viewport, "
+                  "that selection is used.",
+                  required=False, default=""),
+        ToolParam("face", "string",
+                  "Planar sub-element of `support` to sketch on, e.g. 'Face6'. "
+                  "Get face names from list_faces. Requires `support`. The face "
+                  "must be planar.",
+                  required=False, default=""),
     ],
     handler=_handle_create_sketch,
 )
