@@ -153,3 +153,45 @@ results["data"] = {"success": r.success, "error": r.error}
 """)
         assert result["ok"], result.get("error")
         assert result["data"]["success"], result["data"]["error"]
+
+    def test_offset_on_face_sets_attachment_offset(self, run_freecad_script):
+        result = run_freecad_script("""
+import Part
+from freecad_ai.tools.freecad_tools import _handle_create_sketch
+
+feat = doc.addObject("Part::Feature", "Box")
+feat.Shape = Part.makeBox(10, 10, 10)
+doc.recompute()
+
+r = _handle_create_sketch(support="Box", face="Face6", offset=5.0)
+doc.recompute()
+sk = doc.getObject(r.data["name"]) if r.success else None
+results["data"] = {
+    "success": r.success,
+    "error": r.error,
+    "offset_z": sk.AttachmentOffset.Base.z if sk else None,
+}
+""")
+        assert result["ok"], result.get("error")
+        d = result["data"]
+        assert d["success"], d["error"]
+        assert abs(d["offset_z"] - 5.0) < 1e-6
+
+    def test_body_name_with_support_warns(self, run_freecad_script):
+        result = run_freecad_script("""
+import Part
+from freecad_ai.tools.freecad_tools import _handle_create_body, _handle_create_sketch
+
+_handle_create_body(label="Body")
+feat = doc.addObject("Part::Feature", "Box")
+feat.Shape = Part.makeBox(10, 10, 10)
+doc.recompute()
+
+r = _handle_create_sketch(support="Box", face="Face6", body_name="Body")
+doc.recompute()
+results["data"] = {"success": r.success, "error": r.error, "output": r.output}
+""")
+        assert result["ok"], result.get("error")
+        d = result["data"]
+        assert d["success"], d["error"]
+        assert "ignored" in d["output"].lower()

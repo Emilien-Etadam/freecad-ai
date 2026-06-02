@@ -354,6 +354,8 @@ def _owning_body_name(obj, objects):
 
     ``objects`` is an iterable of document objects (e.g. ``doc.Objects``). A Body lists
     its children in ``.Group``.
+
+    See also ``_find_body_for``, which returns the Body object itself.
     """
     for cand in objects:
         if getattr(cand, "TypeId", "") != "PartDesign::Body":
@@ -454,7 +456,12 @@ def _handle_create_sketch(
         # Gather attachment facts from explicit params, or fall back to the GUI
         # selection when neither support nor face was given.
         sup, fc = support, face
-        if not support and not face:
+        # Only consult the viewport selection for a bare call. An explicit
+        # plane, body_name, support, or face signals intent and must not be
+        # silently overridden by whatever happens to be selected (preserves
+        # backward compatibility for create_sketch(plane=..., body_name=...)).
+        if (not support and not face and not body_name
+                and plane.upper() == "XY"):
             picked = _read_planar_selection()
             if picked:
                 sup, fc = picked
@@ -486,7 +493,13 @@ def _handle_create_sketch(
         if spec["mode"] in ("face", "plane"):
             if body_name:
                 warnings.append("body_name ignored — sketch placed relative to support.")
-            container = _get_object(doc, spec["in_body"]) if spec.get("in_body") else None
+            if spec.get("in_body"):
+                container = _get_object(doc, spec["in_body"])
+            elif sup_obj is not None and getattr(sup_obj, "TypeId", "") == "PartDesign::Body":
+                # Sketching on a Body's own face → keep the sketch inside it.
+                container = sup_obj
+            else:
+                container = None
         elif spec["mode"] == "origin":
             container = body
         else:  # standalone
