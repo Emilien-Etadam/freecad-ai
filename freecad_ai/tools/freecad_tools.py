@@ -889,11 +889,12 @@ def _handle_create_datum_plane(
         else:  # origin
             container = body
 
-        # PartDesign::Plane inside a Body, else a standalone Part::DatumPlane.
+        # PartDesign::Plane works both inside a Body (newObject) and standalone
+        # (addObject) — FreeCAD 1.1 has no separate standalone datum-plane type.
         if container is not None:
             datum = container.newObject("PartDesign::Plane", label or "DatumPlane")
         else:
-            datum = doc.addObject("Part::DatumPlane", label or "DatumPlane")
+            datum = doc.addObject("PartDesign::Plane", label or "DatumPlane")
 
         # Attach to the reference. All modes use FlatFace, so the datum's local
         # Z is the reference normal and the offset is always (0, 0, offset).
@@ -960,7 +961,8 @@ CREATE_DATUM_PLANE = ToolDefinition(
         "planar face of an object (support='Obj', face='Face6' — names from "
         "list_faces); or an existing plane by name (support='PlaneName'). With no "
         "reference, the current planar-face/plane selection is used. The result "
-        "is a PartDesign::Plane inside a Body, or a standalone Part::DatumPlane, "
+        "is a PartDesign::Plane (inside a Body, or standalone when the reference "
+        "is not in a Body), "
         "and can be passed to create_sketch as support='<name>'."
     ),
     category="modeling",
