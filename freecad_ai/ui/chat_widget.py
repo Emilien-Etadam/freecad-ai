@@ -1408,7 +1408,7 @@ class ChatDockWidget(QDockWidget):
             "text": text, "images": [], "mode": mode,
         })
         if hook_result.get("block"):
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 f"Blocked by hook: {hook_result.get('reason', 'no reason given')}"))
             return
         if hook_result.get("modify"):
@@ -1447,7 +1447,7 @@ class ChatDockWidget(QDockWidget):
         self.conversation.add_user_message(text, images=images, documents=documents)
         self._refresh_input_history()
         display_content = self.conversation.messages[-1]["content"]
-        self._append_html(render_message("user", display_content))
+        self._append_html(self._render_message("user", display_content))
         self._attachment_strip.clear()
 
         # Check if conversation needs compaction
@@ -1501,7 +1501,7 @@ class ChatDockWidget(QDockWidget):
                     if self.input_edit._images_enabled:
                         self.input_edit._process_image_file(path)
                     else:
-                        self._append_html(render_message("system",
+                        self._append_html(self._render_message("system",
                             "Cannot attach images — no vision support detected. Check Settings or use a vision-capable model."))
                     event.acceptProposedAction()
                     return
@@ -1564,7 +1564,7 @@ class ChatDockWidget(QDockWidget):
         # Route 1: Image files → vision block (requires vision support)
         if ext in ("png", "jpg", "jpeg", "bmp", "gif", "webp"):
             if not self.input_edit._images_enabled:
-                self._append_html(render_message("system",
+                self._append_html(self._render_message("system",
                     "Cannot attach images — no vision support detected. "
                     "Check Settings or use a vision-capable model."))
                 return
@@ -1590,7 +1590,7 @@ class ChatDockWidget(QDockWidget):
         try:
             size = os.path.getsize(path)
             if size > max_size:
-                self._append_html(render_message("system",
+                self._append_html(self._render_message("system",
                     f"File too large ({size // 1024} KB). Maximum is {max_size // 1024} KB."))
                 return None
             with open(path, "rb") as f:
@@ -1599,7 +1599,7 @@ class ChatDockWidget(QDockWidget):
                 return None  # Binary file — let the hook handle it
             return raw.decode("utf-8", errors="replace")
         except OSError as e:
-            self._append_html(render_message("system", f"Cannot read file: {e}"))
+            self._append_html(self._render_message("system", f"Cannot read file: {e}"))
             return None
 
     def _process_file_with_hook(self, path: str, filename: str, ext: str):
@@ -1614,14 +1614,14 @@ class ChatDockWidget(QDockWidget):
             "mime_type": mime_type,
         })
         if result.get("block"):
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 f"Attachment blocked: {result.get('reason', 'no reason given')}"))
             return
         if result.get("text"):
             self._attachment_strip.add_document(filename, result["text"])
             return
         # No hook handled it
-        self._append_html(render_message("system",
+        self._append_html(self._render_message("system",
             f"No converter for .{ext} files. To handle this format, either:\n"
             f"- Add a file_attach hook (see docs/hooks/file-attach-example/)\n"
             f"- Install an MCP server like markdownify-mcp for rich conversion"))
@@ -1768,7 +1768,7 @@ class ChatDockWidget(QDockWidget):
         """Show a dialog to load a previous chat session."""
         saved = Conversation.list_saved()
         if not saved:
-            self._append_html(render_message("system", translate("ChatDockWidget", "No saved sessions found.")))
+            self._append_html(self._render_message("system", translate("ChatDockWidget", "No saved sessions found.")))
             return
 
         # Build display items with timestamps and preview
@@ -1821,13 +1821,13 @@ class ChatDockWidget(QDockWidget):
                 self._refresh_input_history()
                 self._rerender_chat()
                 self._update_token_count()
-                self._append_html(render_message(
+                self._append_html(self._render_message(
                     "system",
                     translate("ChatDockWidget", "Resumed session from {}").format(
                         items[idx][0].split(' | ')[0])
                 ))
             except Exception as e:
-                self._append_html(render_message(
+                self._append_html(self._render_message(
                     "system",
                     translate("ChatDockWidget", "Failed to load session: {}").format(e)
                 ))
@@ -2076,12 +2076,12 @@ class ChatDockWidget(QDockWidget):
                 cfg.max_retention_age_days,
             )
 
-            self._append_html(render_message(
+            self._append_html(self._render_message(
                 "system",
                 translate("ChatDockWidget", "Session log saved to: {}").format(filepath)
             ))
         except Exception as e:
-            self._append_html(render_message(
+            self._append_html(self._render_message(
                 "system",
                 translate("ChatDockWidget", "Failed to save log: {}").format(e)
             ))
@@ -2242,7 +2242,7 @@ class ChatDockWidget(QDockWidget):
         if self._worker and self._worker._tool_timeline and not getattr(self, '_summary_rendered', False):
             self._summary_rendered = True
             from .message_view import render_tool_summary
-            self._append_html(render_tool_summary(self._worker._tool_timeline, palette=self.palette()))
+            self._append_html(self._render_tool_summary(self._worker._tool_timeline, palette=self.palette()))
 
         # Handle code execution based on mode (only if tools were NOT used)
         mode = "plan" if self.mode_combo.currentIndex() == 0 else "act"
@@ -2269,7 +2269,7 @@ class ChatDockWidget(QDockWidget):
 
         skill_name = getattr(self, "_active_skill_name", "")
         if not skill_name:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 "No skill detected \u2014 cannot validate without VALIDATION.md."))
             return
 
@@ -2278,12 +2278,12 @@ class ChatDockWidget(QDockWidget):
             registry = SkillsRegistry()
             skill = registry.get_skill(skill_name)
         except Exception:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 f"Could not load skill '{skill_name}'."))
             return
 
         if not skill or not skill.validation_path:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 f"Skill '{skill_name}' has no VALIDATION.md \u2014 skipping validation."))
             return
 
@@ -2291,7 +2291,7 @@ class ChatDockWidget(QDockWidget):
             with open(skill.validation_path) as f:
                 validation_content = f.read()
         except OSError as e:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 f"Could not read VALIDATION.md: {e}"))
             return
 
@@ -2303,7 +2303,7 @@ class ChatDockWidget(QDockWidget):
         clear_reported_skill_params()
 
         if not params:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 "No parameters reported \u2014 LLM did not call report_skill_params. "
                 "Cannot validate."))
             return
@@ -2312,12 +2312,12 @@ class ChatDockWidget(QDockWidget):
             import FreeCAD as App
             doc = App.ActiveDocument
         except ImportError:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 "FreeCAD not available \u2014 cannot validate."))
             return
 
         if not doc:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 "No active document \u2014 cannot validate."))
             return
 
@@ -2325,7 +2325,7 @@ class ChatDockWidget(QDockWidget):
         results = validate_skill(doc, params, validation_content)
 
         if not results:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 "No validation checks found."))
             return
 
@@ -2336,7 +2336,7 @@ class ChatDockWidget(QDockWidget):
             icon = "\u2713" if r.passed else "\u2717"
             lines.append(f"  {icon}  {r.message}")
 
-        self._append_html(render_message("system", "\n".join(lines)))
+        self._append_html(self._render_message("system", "\n".join(lines)))
 
     @Slot(str)
     def _on_error(self, error_msg):
@@ -2369,7 +2369,7 @@ class ChatDockWidget(QDockWidget):
                 for tc, r in zip(turn["tool_calls"], turn["results"]):
                     summary_parts.append(f"- **{tc['name']}**: {r['content']}")
             summary = "\n".join(summary_parts)
-            self._append_html(render_message(
+            self._append_html(self._render_message(
                 "assistant",
                 translate("ChatDockWidget",
                           "All operations completed successfully:") + "\n\n" + summary
@@ -2382,19 +2382,19 @@ class ChatDockWidget(QDockWidget):
             self.conversation.save()
         else:
             # No tool results — show the raw error
-            self._append_html(render_message("system", translate("ChatDockWidget", "Error: ") + error_msg))
+            self._append_html(self._render_message("system", translate("ChatDockWidget", "Error: ") + error_msg))
 
     # ── Tool call handlers ──────────────────────────────────
 
     @Slot(str, str)
     def _on_tool_call_started(self, tool_name, call_id):
         """Render tool call start in the chat."""
-        self._append_html(render_tool_call(tool_name, call_id, started=True, palette=self.palette()))
+        self._append_html(self._render_tool_call(tool_name, call_id, started=True, palette=self.palette()))
 
     @Slot(str, str, bool, str)
     def _on_tool_call_finished(self, tool_name, call_id, success, output):
         """Render tool call result in the chat."""
-        self._append_html(render_tool_call(
+        self._append_html(self._render_tool_call(
             tool_name, call_id, started=False, success=success, output=output,
             palette=self.palette(),
         ))
@@ -2448,7 +2448,7 @@ class ChatDockWidget(QDockWidget):
                 if not result:
                     continue
 
-            self._append_html(render_execution_result(
+            self._append_html(self._render_execution_result(
                 result.success, result.stdout, result.stderr,
                 palette=self.palette(),
             ))
@@ -2463,7 +2463,7 @@ class ChatDockWidget(QDockWidget):
     def _handle_execution_error(self, result):
         """Handle code execution failure — send error back to LLM for self-correction."""
         if self._retry_count >= get_config().max_retries:
-            self._append_html(render_message(
+            self._append_html(self._render_message(
                 "system",
                 translate("ChatDockWidget",
                           "Max retries ({}) reached. "
@@ -2490,7 +2490,7 @@ class ChatDockWidget(QDockWidget):
                   if capture_mode != "off" else None)
         self.conversation.add_system_message(
             error_msg, images=[vp_img] if vp_img else None)
-        self._append_html(render_message("system", error_msg))
+        self._append_html(self._render_message("system", error_msg))
 
         from ..core.system_prompt import build_system_prompt
         from ..llm.client import should_strip_thinking
@@ -2527,7 +2527,7 @@ class ChatDockWidget(QDockWidget):
         result = dlg.get_result()
 
         if result:
-            self._append_html(render_execution_result(
+            self._append_html(self._render_execution_result(
                 result.success, result.stdout, result.stderr,
                 palette=self.palette(),
             ))
@@ -2564,7 +2564,7 @@ class ChatDockWidget(QDockWidget):
         self.conversation.add_user_message(text, images=pending_images,
                                            documents=pending_docs)
         display_content = self.conversation.messages[-1]["content"]
-        self._append_html(render_message("user", display_content))
+        self._append_html(self._render_message("user", display_content))
         self._attachment_strip.clear()
 
         # Execute the skill
@@ -2585,7 +2585,7 @@ class ChatDockWidget(QDockWidget):
             # Trigger LLM with the injected prompt
             self._send_with_injected_prompt()
         elif exec_result.get("output"):
-            self._append_html(render_message("system", exec_result["output"]))
+            self._append_html(self._render_message("system", exec_result["output"]))
             self.conversation.add_system_message(exec_result["output"])
 
         return True
@@ -2598,6 +2598,29 @@ class ChatDockWidget(QDockWidget):
         self._continue_send()
 
     # ── UI helpers ──────────────────────────────────────────
+
+
+    def _render_message(self, role, content):
+        """Render a chat message using this dock widget's active palette."""
+        return render_message(role, content, palette=self.palette())
+
+    def _render_tool_call(
+        self, tool_name, call_id, started=True, success=True, output="",
+    ):
+        return render_tool_call(
+            tool_name, call_id,
+            started=started, success=success, output=output,
+            palette=self.palette(),
+        )
+
+    def _render_execution_result(self, success, stdout, stderr):
+        return render_execution_result(
+            success, stdout, stderr, palette=self.palette(),
+        )
+
+    def _render_tool_summary(self, timeline):
+        from .message_view import render_tool_summary
+        return render_tool_summary(timeline, palette=self.palette())
 
     def _append_html(self, html_str):
         """Append HTML to the chat display and scroll to bottom."""
@@ -2620,15 +2643,15 @@ class ChatDockWidget(QDockWidget):
                 elif msg["role"] == "assistant" and msg.get("tool_calls"):
                     # Render assistant text + tool call indicators
                     if msg.get("content"):
-                        html_parts.append(render_message("assistant", msg["content"], palette=self.palette()))
+                        html_parts.append(self._render_message("assistant", msg["content"], palette=self.palette()))
                     for tc in msg["tool_calls"]:
-                        html_parts.append(render_tool_call(
+                        html_parts.append(self._render_tool_call(
                             tc["name"], tc["id"], started=False, success=True,
                             output=f"Called with: {json.dumps(tc['arguments'], indent=2)}",
                             palette=self.palette(),
                         ))
                 else:
-                    html_parts.append(render_message(msg["role"], msg.get("content", ""), palette=self.palette()))
+                    html_parts.append(self._render_message(msg["role"], msg.get("content", ""), palette=self.palette()))
 
                 if mode == "plan" and msg["role"] == "assistant":
                     content = Conversation.extract_text(msg.get("content", ""))
