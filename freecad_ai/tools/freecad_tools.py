@@ -1803,6 +1803,22 @@ BOOLEAN_OPERATION = ToolDefinition(
 
 # ── transform_object ────────────────────────────────────────
 
+def _apply_relative_placement(old, tx, ty, tz, ax, ay, az, angle):
+    """Compose a relative move/rotate onto an existing placement.
+
+    Translate is global (added to the base); rotation is applied in place about
+    the object's own origin (pre-multiplied onto the current rotation, base kept).
+    Uses FreeCAD's placement math — intentionally NOT a pure/standalone helper
+    (reimplementing quaternion composition would be more error-prone). Pinned by
+    integration tests.
+    """
+    import FreeCAD as App
+    new_base = old.Base + App.Vector(tx, ty, tz)
+    delta_rot = App.Rotation(App.Vector(ax, ay, az), angle)
+    new_rot = delta_rot.multiply(old.Rotation)
+    return App.Placement(new_base, new_rot)
+
+
 def _handle_transform_object(
     object_name: str,
     translate_x: float = 0.0,
@@ -1812,8 +1828,9 @@ def _handle_transform_object(
     rotate_axis_y: float = 0.0,
     rotate_axis_z: float = 1.0,
     rotate_angle: float = 0.0,
+    relative: bool = True,
 ) -> ToolResult:
-    """Move and/or rotate an object."""
+    """Move and/or rotate an object, relative to its current placement by default."""
     import FreeCAD as App
 
     def do(doc):
@@ -1822,18 +1839,27 @@ def _handle_transform_object(
             hint = _suggest_similar(doc, object_name)
             return ToolResult(success=False, output="", error=f"Object '{object_name}' not found.{hint}")
 
-        placement = App.Placement(
-            App.Vector(translate_x, translate_y, translate_z),
-            App.Rotation(App.Vector(rotate_axis_x, rotate_axis_y, rotate_axis_z), rotate_angle),
-        )
-        obj.Placement = placement
+        if relative:
+            obj.Placement = _apply_relative_placement(
+                obj.Placement, translate_x, translate_y, translate_z,
+                rotate_axis_x, rotate_axis_y, rotate_axis_z, rotate_angle)
+        else:
+            obj.Placement = App.Placement(
+                App.Vector(translate_x, translate_y, translate_z),
+                App.Rotation(App.Vector(rotate_axis_x, rotate_axis_y, rotate_axis_z), rotate_angle))
 
         parts = []
         if translate_x or translate_y or translate_z:
-            parts.append(f"moved to ({translate_x}, {translate_y}, {translate_z})")
+            parts.append(f"translated ({translate_x}, {translate_y}, {translate_z})")
         if rotate_angle:
-            parts.append(f"rotated {rotate_angle} degrees")
-        desc = ", ".join(parts) if parts else "placement reset"
+            parts.append(f"rotated {rotate_angle}°")
+        mode = "relative" if relative else "absolute"
+        if parts:
+            desc = ", ".join(parts) + f" ({mode})"
+        elif relative:
+            desc = "unchanged (relative, no delta given)"
+        else:
+            desc = "placement reset to origin (absolute)"
 
         return ToolResult(
             success=True,
@@ -1846,7 +1872,14 @@ def _handle_transform_object(
 
 TRANSFORM_OBJECT = ToolDefinition(
     name="transform_object",
-    description="Move and/or rotate an object by setting its Placement.",
+    description=(
+        "Move and/or rotate an object. By default (relative=True) the change is "
+        "applied RELATIVE to the object's current placement — translation adds to "
+        "its position, rotation spins it in place, and 0 means no change. Set "
+        "relative=False for an ABSOLUTE placement (overwrites position and "
+        "orientation; omitted values reset to 0). Does not copy — use "
+        "duplicate_object to make a copy."
+    ),
     category="modeling",
     parameters=[
         ToolParam("object_name", "string", "Internal name of the object to transform"),
@@ -1857,6 +1890,8 @@ TRANSFORM_OBJECT = ToolDefinition(
         ToolParam("rotate_axis_y", "number", "Rotation axis Y component", required=False, default=0.0),
         ToolParam("rotate_axis_z", "number", "Rotation axis Z component", required=False, default=1.0),
         ToolParam("rotate_angle", "number", "Rotation angle in degrees", required=False, default=0.0),
+        ToolParam("relative", "boolean", "Apply relative to the current placement "
+                  "(default). False = absolute overwrite.", required=False, default=True),
     ],
     handler=_handle_transform_object,
 )
