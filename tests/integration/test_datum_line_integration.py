@@ -39,7 +39,7 @@ results["data"] = {
 import FreeCAD as App
 from freecad_ai.tools.freecad_tools import _handle_create_datum_line
 
-r = _handle_create_datum_line(point1=[1, 2, 3], point2=[1, 2, 13])
+r = _handle_create_datum_line(point1=[0, 0, 0], point2=[3, 4, 0])
 doc.recompute()
 ln = doc.getObject(r.data["name"]) if r.success else None
 zdir = ln.Placement.Rotation.multVec(App.Vector(0, 0, 1)) if ln else None
@@ -52,10 +52,10 @@ results["data"] = {
         assert result["ok"], result.get("error")
         d = result["data"]
         assert d["success"], d["error"]
-        # p1→p2 is +Z; the placed line's local Z must align with it.
-        assert abs(d["zdir"][0]) < 1e-6
-        assert abs(d["zdir"][1]) < 1e-6
-        assert abs(d["zdir"][2] - 1.0) < 1e-6
+        # p1→p2 is (3,4,0); the placed line's local Z must align with it.
+        assert abs(d["zdir"][0] - 0.6) < 1e-6
+        assert abs(d["zdir"][1] - 0.8) < 1e-6
+        assert abs(d["zdir"][2]) < 1e-6
 
     def test_two_points_in_body(self, run_freecad_script):
         result = run_freecad_script("""
@@ -140,10 +140,13 @@ for i, e in enumerate(feat.Shape.Edges, start=1):
 r = _handle_create_datum_line(support="Box", edge=straight)
 doc.recompute()
 ln = doc.getObject(r.data["name"]) if r.success else None
+state = list(getattr(ln, "State", []) or []) if ln else None
 results["data"] = {
     "success": r.success,
     "error": r.error,
     "type_id": ln.TypeId if ln else None,
+    "map_mode": ln.MapMode if ln else None,
+    "state": state,
     "edge": straight,
 }
 """)
@@ -152,6 +155,8 @@ results["data"] = {
         assert d["edge"] is not None
         assert d["success"], d["error"]
         assert d["type_id"] == "PartDesign::Line"
+        assert d["map_mode"] == "Tangent"
+        assert not any(s in ("Invalid", "Error") for s in d["state"])
 
     def test_origin_axis(self, run_freecad_script):
         result = run_freecad_script("""
@@ -223,10 +228,7 @@ from freecad_ai.tools.freecad_tools import _handle_create_datum_line
 body = doc.addObject("PartDesign::Body", "Body")
 sk = body.newObject("Sketcher::SketchObject", "Sketch")
 import Part
-sk.addGeometry(Part.LineSegment(App.Vector(5, 0, 0), App.Vector(10, 0, 0)), False)
-sk.addGeometry(Part.LineSegment(App.Vector(10, 0, 0), App.Vector(10, 5, 0)), False)
-sk.addGeometry(Part.LineSegment(App.Vector(10, 5, 0), App.Vector(5, 5, 0)), False)
-sk.addGeometry(Part.LineSegment(App.Vector(5, 5, 0), App.Vector(5, 0, 0)), False)
+sk.addGeometry(Part.Circle(App.Vector(5, 0, 0), App.Vector(0, 0, 1), 1.0), False)
 doc.recompute()
 
 # A datum line along global Y, offset in X, as a revolve axis.
@@ -250,4 +252,4 @@ results["data"] = {
         d = result["data"]
         assert d["datum_ok"], d["datum_err"]
         assert d["rev_valid"]
-        assert d["rev_solids"] >= 1
+        assert d["rev_solids"] == 1
