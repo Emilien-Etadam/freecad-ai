@@ -107,10 +107,12 @@ The provider automatically appears in the Settings dropdown.
 
 ### New Tools
 
-Tools are Python functions registered in `freecad_ai/tools/freecad_tools.py`. Each tool has:
-- A handler function (e.g., `_handle_create_something`)
+Built-in tools are split across `freecad_ai/tools/handlers/` (one module per domain, e.g. `sketch.py`, `document.py`), with shared helpers in `tool_common.py`. The file `freecad_ai/tools/freecad_tools.py` is a thin facade: it re-exports handlers and defines `ALL_TOOLS` (keep this list in sync when adding a tool).
+
+Each tool needs:
+- A handler function (e.g., `_handle_create_something`) in the appropriate `handlers/*.py` module
 - A `ToolDefinition` with name, description, parameters, and handler
-- An entry in the `ALL_TOOLS` list
+- An entry in `ALL_TOOLS` in `freecad_tools.py`
 
 See [Creating Custom Tools](https://github.com/ghbalf/freecad-ai/wiki/Creating-Custom-Tools) for the user-tool convention, which also applies to built-in tools.
 
