@@ -128,8 +128,14 @@ none may segfault (per the FreeCAD-API gotchas, bad attachment args can crash).
   listing available faces (reuse `list_faces` formatting).
 - `face` exists but is **non-planar** (`face.Surface` is not a `Part.Plane`) →
   error: "Face 'FaceN' is not planar; sketches need a planar face."
-- Selection fallback with an empty/!-face/!-plane selection → error telling the
-  user to select a planar face or pass `support`/`face`.
+- Selection fallback only activates when `support`/`face` are both empty **and**
+  a usable planar face or plane is selected. An empty or non-usable selection
+  (edge, vertex, nothing) falls through to the current origin-plane/standalone
+  behavior — it is **not** an error, to preserve backward compatibility for
+  plain `create_sketch(plane=...)` calls made with an unrelated selection active.
+- If `body_name` is passed together with `support`, `body_name` is ignored (the
+  sketch's container is the support's owning Body, or standalone) and a warning
+  is included in the result. This avoids a fragile name-vs-label comparison.
 - After attachment, recompute and verify the sketch's placement resolved (the
   attachment didn't silently fail) before adding geometry.
 
