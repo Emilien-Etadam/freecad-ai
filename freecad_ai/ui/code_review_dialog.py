@@ -8,7 +8,12 @@ LLM for self-correction.
 """
 
 from .compat import QtWidgets, QtCore, QtGui
-from .message_view import _get_theme_colors, refresh_theme_cache
+from .message_view import colors_from_palette, refresh_theme_cache
+from .theme_palette import (
+    label_status_stylesheet,
+    pushbutton_accent_stylesheet,
+    qtextedit_palette_stylesheet,
+)
 from ..i18n import translate
 
 QDialog = QtWidgets.QDialog
@@ -23,26 +28,8 @@ QPalette = QtGui.QPalette
 from ..core.executor import ExecutionResult, execute_code, validate_code
 
 
-def _qtextedit_palette_stylesheet(palette, border_color=None):
-    """Build QTextEdit stylesheet from the active Qt palette (not hardcoded theme dict)."""
-    border = border_color or palette.color(QPalette.Mid).name()
-    return (
-        "QTextEdit { "
-        f"background-color: {palette.color(QPalette.Base).name()}; "
-        f"color: {palette.color(QPalette.Text).name()}; "
-        f"selection-background-color: {palette.color(QPalette.Highlight).name()}; "
-        f"selection-color: {palette.color(QPalette.HighlightedText).name()}; "
-        f"border: 1px solid {border}; "
-        "padding: 8px; }"
-    )
-
-
 class _FixPromptDialog(QDialog):
-    """Prompt composer for Fix with AI.
-
-    Pre-fills a message based on what the user has seen so far (error, clean
-    execution, or neither). The user can edit freely before sending.
-    """
+    """Prompt composer for Fix with AI."""
 
     def __init__(self, code, last_error_result, execution_result, parent=None):
         super().__init__(parent)
@@ -100,7 +87,6 @@ class _FixPromptDialog(QDialog):
         font.setStyleHint(QFont.TypeWriter)
         self.prompt_edit.setFont(font)
         self.prompt_edit.setPlainText(self._default_prompt())
-        self.prompt_edit.setStyleSheet(_qtextedit_palette_stylesheet(self.palette()))
         layout.addWidget(self.prompt_edit)
 
         btn_layout = QHBoxLayout()
@@ -110,16 +96,22 @@ class _FixPromptDialog(QDialog):
         self.cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.cancel_btn)
 
-        colors = _get_theme_colors()
         self.send_btn = QPushButton(translate("CodeReviewDialog", "Send"))
-        self.send_btn.setStyleSheet(
-            f"QPushButton {{ background-color: {colors['tool_success_border']}; color: white; "
-            f"padding: 6px 20px; font-weight: bold; }}"
-        )
         self.send_btn.clicked.connect(self._send)
         btn_layout.addWidget(self.send_btn)
 
         layout.addLayout(btn_layout)
+        self._apply_palette_styles()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        refresh_theme_cache()
+        self._apply_palette_styles()
+
+    def _apply_palette_styles(self):
+        self.prompt_edit.setStyleSheet(qtextedit_palette_stylesheet(self.palette()))
+        self.send_btn.setStyleSheet(
+            pushbutton_accent_stylesheet(self.palette(), padding="6px 20px"))
 
     def _send(self):
         text = self.prompt_edit.toPlainText().strip()
@@ -149,22 +141,18 @@ class CodeReviewDialog(QDialog):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        # Header
         header = QLabel(translate("CodeReviewDialog", "Review the proposed code before executing:"))
         header.setStyleSheet("font-weight: bold; margin-bottom: 4px;")
         layout.addWidget(header)
 
-        # Code editor
         self.code_edit = QTextEdit()
         font = QFont("Monospace", 11)
         font.setStyleHint(QFont.TypeWriter)
         self.code_edit.setFont(font)
         self.code_edit.setPlainText(self.code)
         self.code_edit.setReadOnly(True)
-        self._apply_code_edit_style(self.code_edit)
         layout.addWidget(self.code_edit)
 
-        # Result area (hidden initially)
         self.result_label = QLabel()
         self.result_label.setWordWrap(True)
         self.result_label.setVisible(False)
@@ -175,10 +163,8 @@ class CodeReviewDialog(QDialog):
         self.result_text.setReadOnly(True)
         self.result_text.setMaximumHeight(150)
         self.result_text.setVisible(False)
-        self.result_text.setStyleSheet(_qtextedit_palette_stylesheet(self.palette()))
         layout.addWidget(self.result_text)
 
-        # Buttons
         btn_layout = QHBoxLayout()
 
         self.edit_btn = QPushButton(translate("CodeReviewDialog", "Edit"))
@@ -195,8 +181,6 @@ class CodeReviewDialog(QDialog):
 
         btn_layout.addStretch()
 
-        colors = _get_theme_colors()
-
         self.fix_btn = QPushButton(translate("CodeReviewDialog", "Fix with AI"))
         self.fix_btn.setToolTip(translate(
             "CodeReviewDialog",
@@ -206,10 +190,6 @@ class CodeReviewDialog(QDialog):
         btn_layout.addWidget(self.fix_btn)
 
         self.execute_btn = QPushButton(translate("CodeReviewDialog", "Execute"))
-        self.execute_btn.setStyleSheet(
-            f"QPushButton {{ background-color: {colors['tool_success_border']}; color: white; "
-            f"padding: 6px 20px; font-weight: bold; }}"
-        )
         self.execute_btn.clicked.connect(self._execute)
         btn_layout.addWidget(self.execute_btn)
 
@@ -218,16 +198,26 @@ class CodeReviewDialog(QDialog):
         btn_layout.addWidget(self.cancel_btn)
 
         layout.addLayout(btn_layout)
+        self._apply_palette_styles()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        refresh_theme_cache()
+        self._apply_palette_styles()
+
+    def _apply_palette_styles(self):
+        self._apply_code_edit_style(self.code_edit, editable=self._editable)
+        self.result_text.setStyleSheet(qtextedit_palette_stylesheet(self.palette()))
+        self.execute_btn.setStyleSheet(
+            pushbutton_accent_stylesheet(self.palette(), padding="6px 20px"))
 
     def _apply_code_edit_style(self, text_edit, *, editable=False):
-        """Style a code QTextEdit from this dialog's active palette."""
         border = None
         if editable:
             border = self.palette().color(QPalette.Highlight).name()
-        text_edit.setStyleSheet(_qtextedit_palette_stylesheet(self.palette(), border))
+        text_edit.setStyleSheet(qtextedit_palette_stylesheet(self.palette(), border))
 
     def _toggle_edit(self):
-        """Toggle code editor between read-only and editable."""
         self._editable = not self._editable
         self.code_edit.setReadOnly(not self._editable)
         if self._editable:
@@ -237,17 +227,16 @@ class CodeReviewDialog(QDialog):
         self._apply_code_edit_style(self.code_edit, editable=self._editable)
 
     def _render_result(self, result, success_msg, failure_msg):
-        """Render an ExecutionResult into the shared result widgets."""
         self.result_label.setVisible(True)
-        colors = _get_theme_colors()
+        colors = colors_from_palette(self.palette())
         if result.success:
             self.result_label.setText(success_msg)
             self.result_label.setStyleSheet(
-                f"color: {colors['tool_success_text']}; font-weight: bold;")
+                label_status_stylesheet(colors["tool_success_text"]))
         else:
             self.result_label.setText(failure_msg)
             self.result_label.setStyleSheet(
-                f"color: {colors['tool_error_text']}; font-weight: bold;")
+                label_status_stylesheet(colors["tool_error_text"]))
 
         output = ""
         if result.stdout.strip():
@@ -263,7 +252,6 @@ class CodeReviewDialog(QDialog):
             self.result_text.setVisible(False)
 
     def _check(self):
-        """Validate the code in a sandbox without touching the live document."""
         self.code = self.code_edit.toPlainText()
         from ..core.dangerous_mode import get_dangerous_mode
         result = validate_code(self.code, skip_safety=get_dangerous_mode().active)
@@ -275,7 +263,6 @@ class CodeReviewDialog(QDialog):
         self.last_error_result = None if result.success else result
 
     def _execute(self):
-        """Execute the code and show results."""
         self.code = self.code_edit.toPlainText()
         self.execution_result = execute_code(self.code)
         self._render_result(
@@ -286,28 +273,21 @@ class CodeReviewDialog(QDialog):
 
         if self.execution_result.success:
             self.last_error_result = None
-            # Disable Execute and turn Cancel into Close — terminal state.
             self.execute_btn.setEnabled(False)
             self.check_btn.setEnabled(False)
             self.cancel_btn.setText(translate("CodeReviewDialog", "Close"))
             self.cancel_btn.clicked.disconnect()
             self.cancel_btn.clicked.connect(self.accept)
         else:
-            # Execution was attempted and failed — transaction is already
-            # aborted by the executor. Leave Execute enabled so the user
-            # can retry after an Edit.
             self.last_error_result = self.execution_result
 
     def _request_fix(self):
-        """Open the prompt composer; on Send, close this dialog with the request."""
         self.code = self.code_edit.toPlainText()
         prompt_dlg = _FixPromptDialog(
             self.code, self.last_error_result, self.execution_result, parent=self)
         prompt_dlg.exec()
         if not prompt_dlg.confirmed:
             return
-        # Package the user's prompt as an ExecutionResult so the caller can
-        # feed it into the existing _handle_execution_error path unchanged.
         self.last_error_result = ExecutionResult(
             success=False,
             stdout="",
@@ -318,5 +298,4 @@ class CodeReviewDialog(QDialog):
         self.accept()
 
     def get_result(self):
-        """Return the execution result after dialog closes."""
         return self.execution_result
