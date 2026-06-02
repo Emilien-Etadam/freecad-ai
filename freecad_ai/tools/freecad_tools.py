@@ -329,6 +329,97 @@ def _resolve_sketch_attachment(support, face, plane, body_present,
     return {"mode": "standalone"}
 
 
+_PLANE_TYPE_IDS = ("App::Plane", "PartDesign::Plane", "Part::DatumPlane")
+
+
+def _classify_support(obj):
+    """Classify a support object for sketch attachment.
+
+    Returns 'plane' for origin/datum planes, 'solid' for shapes with solids,
+    'other' for everything else (sketches, wires, empty features).
+    """
+    if getattr(obj, "TypeId", "") in _PLANE_TYPE_IDS:
+        return "plane"
+    shape = getattr(obj, "Shape", None)
+    try:
+        if shape is not None and shape.Solids:
+            return "solid"
+    except Exception:
+        pass
+    return "other"
+
+
+def _owning_body_name(obj, objects):
+    """Return the Name of the PartDesign::Body that contains ``obj``, or None.
+
+    ``objects`` is the document's object list (``doc.Objects``). A Body lists
+    its children in ``.Group``.
+    """
+    for cand in objects:
+        if getattr(cand, "TypeId", "") != "PartDesign::Body":
+            continue
+        try:
+            if any(getattr(c, "Name", None) == obj.Name for c in cand.Group):
+                return cand.Name
+        except Exception:
+            pass
+    return None
+
+
+def _inspect_face(obj, face_name):
+    """Return (exists, planar) for ``face_name`` on ``obj``'s shape.
+
+    Never raises — a missing face or non-shape object yields (False, False).
+    """
+    import Part
+    try:
+        face = obj.Shape.getElement(face_name)
+    except Exception:
+        return (False, False)
+    if face is None or face.ShapeType != "Face":
+        return (False, False)
+    try:
+        return (True, isinstance(face.Surface, Part.Plane))
+    except Exception:
+        return (True, False)
+
+
+def _read_planar_selection():
+    """Return (object_name, sub_element) for the first usable planar-face or
+    plane selection in the GUI, or None.
+
+    Used as a fallback when create_sketch is called with no support/face. Any
+    error or non-usable selection (edge, vertex, nothing, non-planar face)
+    returns None so the caller falls through to default behavior.
+    """
+    try:
+        import FreeCADGui as Gui
+        import Part
+    except Exception:
+        return None
+    try:
+        sel = Gui.Selection.getSelectionEx()
+    except Exception:
+        return None
+    for s in sel or []:
+        obj = getattr(s, "Object", None)
+        if obj is None:
+            continue
+        subs = getattr(s, "SubElementNames", None) or []
+        if subs:
+            sub = subs[0]
+            try:
+                el = obj.Shape.getElement(sub)
+                if (el is not None and el.ShapeType == "Face"
+                        and isinstance(el.Surface, Part.Plane)):
+                    return (obj.Name, sub)
+            except Exception:
+                continue
+        elif getattr(obj, "TypeId", "") in _PLANE_TYPE_IDS:
+            return (obj.Name, "")
+    return None
+
+
 # ── create_sketch ───────────────────────────────────────────
 
 def _handle_create_sketch(

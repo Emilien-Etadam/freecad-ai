@@ -1,6 +1,6 @@
 """Unit tests for the pure create_sketch attachment resolver (no FreeCAD)."""
 
-from freecad_ai.tools.freecad_tools import _resolve_sketch_attachment
+from freecad_ai.tools.freecad_tools import _resolve_sketch_attachment, _classify_support, _owning_body_name
 
 
 def _resolve(**kw):
@@ -96,3 +96,53 @@ class TestResolveSketchAttachment:
     def test_none_face_is_treated_as_absent(self):
         spec = _resolve(support="", face=None, plane="XY", body_present=True)
         assert spec == {"mode": "origin", "plane": "XY"}
+
+
+class _FakeObj:
+    def __init__(self, type_id, name="Obj", has_solids=False, group_of=None):
+        self.TypeId = type_id
+        self.Name = name
+        self._has_solids = has_solids
+        # FreeCAD groups expose .Group; a Body lists its children there.
+        if group_of is not None:
+            self.Group = group_of
+
+    @property
+    def Shape(self):
+        class _S:
+            Solids = [1] if self._has_solids else []
+        return _S()
+
+
+class TestClassifySupport:
+    def test_datum_plane_is_plane(self):
+        assert _classify_support(_FakeObj("PartDesign::Plane")) == "plane"
+
+    def test_origin_app_plane_is_plane(self):
+        assert _classify_support(_FakeObj("App::Plane")) == "plane"
+
+    def test_part_datum_plane_is_plane(self):
+        assert _classify_support(_FakeObj("Part::DatumPlane")) == "plane"
+
+    def test_solid_feature_is_solid(self):
+        assert _classify_support(
+            _FakeObj("Part::Feature", has_solids=True)) == "solid"
+
+    def test_feature_without_solids_is_other(self):
+        assert _classify_support(
+            _FakeObj("Part::Feature", has_solids=False)) == "other"
+
+    def test_sketch_is_other(self):
+        assert _classify_support(_FakeObj("Sketcher::SketchObject")) == "other"
+
+
+class TestOwningBodyName:
+    def test_object_in_body_returns_body_name(self):
+        child = _FakeObj("PartDesign::Pad", name="Pad")
+        body = _FakeObj("PartDesign::Body", name="Body", group_of=[child])
+        # The fake document is just the list of objects to scan.
+        assert _owning_body_name(child, [body, child]) == "Body"
+
+    def test_standalone_object_returns_none(self):
+        feat = _FakeObj("Part::Feature", name="Imported")
+        assert _owning_body_name(feat, [feat]) is None
