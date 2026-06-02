@@ -2053,6 +2053,22 @@ BOOLEAN_OPERATION = ToolDefinition(
 
 # ── transform_object ────────────────────────────────────────
 
+def _apply_relative_placement(old, tx, ty, tz, ax, ay, az, angle):
+    """Compose a relative move/rotate onto an existing placement.
+
+    Translate is global (added to the base); rotation is applied in place about
+    the object's own origin (pre-multiplied onto the current rotation, base kept).
+    Uses FreeCAD's placement math — intentionally NOT a pure/standalone helper
+    (reimplementing quaternion composition would be more error-prone). Pinned by
+    integration tests.
+    """
+    import FreeCAD as App
+    new_base = old.Base + App.Vector(tx, ty, tz)
+    delta_rot = App.Rotation(App.Vector(ax, ay, az), angle)
+    new_rot = delta_rot.multiply(old.Rotation)
+    return App.Placement(new_base, new_rot)
+
+
 def _handle_transform_object(
     object_name: str,
     translate_x: float = 0.0,
@@ -2062,8 +2078,9 @@ def _handle_transform_object(
     rotate_axis_y: float = 0.0,
     rotate_axis_z: float = 1.0,
     rotate_angle: float = 0.0,
+    relative: bool = True,
 ) -> ToolResult:
-    """Move and/or rotate an object."""
+    """Move and/or rotate an object, relative to its current placement by default."""
     import FreeCAD as App
 
     def do(doc):
@@ -2072,18 +2089,27 @@ def _handle_transform_object(
             hint = _suggest_similar(doc, object_name)
             return ToolResult(success=False, output="", error=f"Object '{object_name}' not found.{hint}")
 
-        placement = App.Placement(
-            App.Vector(translate_x, translate_y, translate_z),
-            App.Rotation(App.Vector(rotate_axis_x, rotate_axis_y, rotate_axis_z), rotate_angle),
-        )
-        obj.Placement = placement
+        if relative:
+            obj.Placement = _apply_relative_placement(
+                obj.Placement, translate_x, translate_y, translate_z,
+                rotate_axis_x, rotate_axis_y, rotate_axis_z, rotate_angle)
+        else:
+            obj.Placement = App.Placement(
+                App.Vector(translate_x, translate_y, translate_z),
+                App.Rotation(App.Vector(rotate_axis_x, rotate_axis_y, rotate_axis_z), rotate_angle))
 
         parts = []
         if translate_x or translate_y or translate_z:
-            parts.append(f"moved to ({translate_x}, {translate_y}, {translate_z})")
+            parts.append(f"translated ({translate_x}, {translate_y}, {translate_z})")
         if rotate_angle:
-            parts.append(f"rotated {rotate_angle} degrees")
-        desc = ", ".join(parts) if parts else "placement reset"
+            parts.append(f"rotated {rotate_angle}°")
+        mode = "relative" if relative else "absolute"
+        if parts:
+            desc = ", ".join(parts) + f" ({mode})"
+        elif relative:
+            desc = "unchanged (relative, no delta given)"
+        else:
+            desc = "placement reset to origin (absolute)"
 
         return ToolResult(
             success=True,
@@ -2096,7 +2122,14 @@ def _handle_transform_object(
 
 TRANSFORM_OBJECT = ToolDefinition(
     name="transform_object",
-    description="Move and/or rotate an object by setting its Placement.",
+    description=(
+        "Move and/or rotate an object. By default (relative=True) the change is "
+        "applied RELATIVE to the object's current placement — translation adds to "
+        "its position, rotation spins it in place, and 0 means no change. Set "
+        "relative=False for an ABSOLUTE placement (overwrites position and "
+        "orientation; omitted values reset to 0). Does not copy — use "
+        "duplicate_object to make a copy."
+    ),
     category="modeling",
     parameters=[
         ToolParam("object_name", "string", "Internal name of the object to transform"),
@@ -2107,8 +2140,97 @@ TRANSFORM_OBJECT = ToolDefinition(
         ToolParam("rotate_axis_y", "number", "Rotation axis Y component", required=False, default=0.0),
         ToolParam("rotate_axis_z", "number", "Rotation axis Z component", required=False, default=1.0),
         ToolParam("rotate_angle", "number", "Rotation angle in degrees", required=False, default=0.0),
+        ToolParam("relative", "boolean", "Apply relative to the current placement "
+                  "(default). False = absolute overwrite.", required=False, default=True),
     ],
     handler=_handle_transform_object,
+)
+
+
+def _duplicate_label(base_label, requested):
+    """Label for a duplicated object: the requested label, or '<base>_Copy'."""
+    return requested or f"{base_label}_Copy"
+
+
+def _handle_duplicate_object(
+    object_name: str,
+    translate_x: float = 0.0,
+    translate_y: float = 0.0,
+    translate_z: float = 0.0,
+    rotate_axis_x: float = 0.0,
+    rotate_axis_y: float = 0.0,
+    rotate_axis_z: float = 1.0,
+    rotate_angle: float = 0.0,
+    label: str = "",
+) -> ToolResult:
+    """Duplicate an object (independent parametric copy), optionally offsetting it."""
+
+    def do(doc):
+        obj = _get_object(doc, object_name)
+        if not obj:
+            hint = _suggest_similar(doc, object_name)
+            return ToolResult(success=False, output="", error=f"Object '{object_name}' not found.{hint}")
+
+        result = doc.copyObject(obj, True)
+        # copyObject(single_obj, True) returns a plain DocumentObject on FreeCAD
+        # 1.1.x; the list/tuple branch is a forward-compat guard. [-1] is chosen
+        # because topological order places the most-derived object (e.g. the Body)
+        # last. Pinned by integration.
+        copy = result[-1] if isinstance(result, (list, tuple)) else result
+        if copy is None:
+            return ToolResult(success=False, output="", error=f"Failed to duplicate '{obj.Label}'.")
+
+        copy.Label = _duplicate_label(obj.Label, label)
+
+        if translate_x or translate_y or translate_z or rotate_angle:
+            copy.Placement = _apply_relative_placement(
+                copy.Placement, translate_x, translate_y, translate_z,
+                rotate_axis_x, rotate_axis_y, rotate_axis_z, rotate_angle)
+
+        doc.recompute()
+
+        # If the copy can't recompute cleanly, State contains Invalid/Error. (For a
+        # Body only the Body-level state is checked here; the executor sandbox
+        # catches child-level failures as the higher-level net.)
+        state = list(getattr(copy, "State", []) or [])
+        if any(s in ("Invalid", "Error") for s in state):
+            return ToolResult(success=False, output="",
+                              error=f"Duplicate '{copy.Label}' did not recompute cleanly.")
+
+        return ToolResult(
+            success=True,
+            output=(f"Duplicated '{obj.Label}' → '{copy.Label}' ({copy.TypeId}); "
+                    "original unchanged."),
+            data={"name": copy.Name, "label": copy.Label},
+        )
+
+    return _with_undo("Duplicate Object", do)
+
+
+DUPLICATE_OBJECT = ToolDefinition(
+    name="duplicate_object",
+    description=(
+        "Duplicate an object as an independent, editable copy that preserves its "
+        "parametric history (the whole feature tree — e.g. a Body with its sketches "
+        "and pads). The original is left unchanged. Optional translate/rotate offset "
+        "the copy relative to the original (0 = on top of it). To duplicate a solid, "
+        "pass its Body. Note: if the object's placement is driven by an attachment "
+        "(e.g. a datum attached to an edge), the offset won't stick — duplicate a "
+        "fixed-placement object (such as a two-point datum line) for a parallel copy."
+    ),
+    category="modeling",
+    parameters=[
+        ToolParam("object_name", "string", "Internal name of the object to duplicate"),
+        ToolParam("translate_x", "number", "X offset of the copy in mm", required=False, default=0.0),
+        ToolParam("translate_y", "number", "Y offset of the copy in mm", required=False, default=0.0),
+        ToolParam("translate_z", "number", "Z offset of the copy in mm", required=False, default=0.0),
+        ToolParam("rotate_axis_x", "number", "Rotation axis X component", required=False, default=0.0),
+        ToolParam("rotate_axis_y", "number", "Rotation axis Y component", required=False, default=0.0),
+        ToolParam("rotate_axis_z", "number", "Rotation axis Z component", required=False, default=1.0),
+        ToolParam("rotate_angle", "number", "Rotation angle for the copy in degrees", required=False, default=0.0),
+        ToolParam("label", "string", "Label for the copy (default '<original>_Copy')", required=False, default=""),
+    ],
+    handler=_handle_duplicate_object,
 )
 
 
@@ -5552,6 +5674,7 @@ ALL_TOOLS = [
     SWEEP_SKETCH,
     BOOLEAN_OPERATION,
     TRANSFORM_OBJECT,
+    DUPLICATE_OBJECT,
     FILLET_EDGES,
     CHAMFER_EDGES,
     CREATE_INNER_RIDGE,
