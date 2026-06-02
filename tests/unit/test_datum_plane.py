@@ -45,3 +45,21 @@ class TestResolveDatumPlaneAttachment:
                         face_exists=True, face_planar=False)
         assert spec["mode"] == "error"
         assert "planar" in spec["message"].lower()
+
+
+from freecad_ai.tools.freecad_tools import CREATE_DATUM_PLANE, ALL_TOOLS
+
+
+class TestCreateDatumPlaneDefinition:
+    def test_name_and_category(self):
+        assert CREATE_DATUM_PLANE.name == "create_datum_plane"
+        assert CREATE_DATUM_PLANE.category == "modeling"
+
+    def test_registered_in_all_tools(self):
+        assert CREATE_DATUM_PLANE in ALL_TOOLS
+
+    def test_no_array_param_missing_items(self):
+        # GitHub Models rejects array params declared without `items` (issue #10).
+        for p in CREATE_DATUM_PLANE.parameters:
+            if getattr(p, "type", None) == "array":
+                assert getattr(p, "items", None) is not None, p.name

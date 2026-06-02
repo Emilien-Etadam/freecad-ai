@@ -908,7 +908,15 @@ def _handle_create_datum_plane(
             if plane_feat:
                 datum.AttachmentSupport = [(plane_feat, "")]
                 datum.MapMode = "FlatFace"
+            else:
+                warnings.append(
+                    f"could not resolve the {spec['plane']} origin plane — "
+                    "datum left at the document origin.")
 
+        # AttachmentOffset is in the datum's local frame, whose Z is the
+        # reference normal (FlatFace) for every mode — so (0, 0, offset) is
+        # always along the normal. (create_sketch maps origin-plane offsets to
+        # global axes for legacy reasons; the result is equivalent.)
         if offset != 0:
             datum.AttachmentOffset = App.Placement(
                 App.Vector(0, 0, offset), App.Rotation())
@@ -919,7 +927,12 @@ def _handle_create_datum_plane(
         # Invalid/Error. (The executor sandbox is the higher-level net.)
         state = list(getattr(datum, "State", []) or [])
         if any(s in ("Invalid", "Error") for s in state):
-            ref = spec.get("support") or spec.get("plane") or "reference"
+            if spec.get("support"):
+                ref = spec["support"]
+            elif spec.get("plane"):
+                ref = "origin plane " + spec["plane"]
+            else:
+                ref = "reference"
             return ToolResult(
                 success=False, output="",
                 error=(f"Failed to attach datum plane to '{ref}'"
