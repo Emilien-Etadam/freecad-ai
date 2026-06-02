@@ -104,7 +104,10 @@ Object created:
 - container is a Body → `container.newObject("PartDesign::Plane", label or
   "DatumPlane")`.
 - standalone (reference is a plain `Part::Feature` face, e.g. an imported
-  mesh→solid) → `doc.addObject("Part::DatumPlane", label or "DatumPlane")`.
+  mesh→solid) → `doc.addObject("PartDesign::Plane", label or "DatumPlane")`.
+  (FreeCAD 1.1 has no separate `Part::DatumPlane` type — `PartDesign::Plane`
+  works both inside a Body via `newObject` and standalone via `addObject`,
+  confirmed empirically.)
 
 ### Attachment
 
@@ -173,8 +176,8 @@ integration tests (real FreeCAD) plus one small pure check.
   `offset` in Z.
 - Datum plane offset from a planar face of a Body feature → `PartDesign::Plane`
   attached, offset along the face normal.
-- Datum plane from a **standalone** `Part::Feature` solid's face → object is
-  `Part::DatumPlane` (standalone), attached to the face.
+- Datum plane from a **standalone** `Part::Feature` solid's face → a standalone
+  `PartDesign::Plane` (created via `doc.addObject`), attached to the face.
 - End-to-end: `create_datum_plane` then `create_sketch(support="<plane name>")`
   succeeds and the sketch attaches to the datum plane (closes the loop; piece #1
   is on master so this is runnable).
