@@ -24,6 +24,12 @@ class TestResolveDatumLineDef:
         assert spec == {"mode": "edge", "support": "Box", "sub": "Edge3",
                         "in_body": "Body"}
 
+    def test_edge_mode_standalone_no_body(self):
+        spec = _resolve(support="Imported", edge="Edge1", support_kind="solid",
+                        edge_exists=True, edge_straight=True, in_body=None)
+        assert spec == {"mode": "edge", "support": "Imported", "sub": "Edge1",
+                        "in_body": None}
+
     def test_origin_axis_mode(self):
         spec = _resolve(axis="Z", body_present=True)
         assert spec == {"mode": "origin", "axis": "Z"}
@@ -45,6 +51,7 @@ class TestResolveDatumLineDef:
     def test_point2_without_point1_error(self):
         spec = _resolve(point2=[0, 0, 0])
         assert spec["mode"] == "error"
+        assert "[x, y, z]" in spec["message"] or "point" in spec["message"].lower()
 
     def test_edge_without_support_error(self):
         spec = _resolve(edge="Edge1")
