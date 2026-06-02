@@ -352,7 +352,7 @@ def _classify_support(obj):
 def _owning_body_name(obj, objects):
     """Return the Name of the PartDesign::Body that contains ``obj``, or None.
 
-    ``objects`` is the document's object list (``doc.Objects``). A Body lists
+    ``objects`` is an iterable of document objects (e.g. ``doc.Objects``). A Body lists
     its children in ``.Group``.
     """
     for cand in objects:
@@ -369,9 +369,13 @@ def _owning_body_name(obj, objects):
 def _inspect_face(obj, face_name):
     """Return (exists, planar) for ``face_name`` on ``obj``'s shape.
 
-    Never raises — a missing face or non-shape object yields (False, False).
+    Never raises — a missing face, unavailable Part module, or non-shape object
+    yields (False, False).
     """
-    import Part
+    try:
+        import Part
+    except Exception:
+        return (False, False)
     try:
         face = obj.Shape.getElement(face_name)
     except Exception:
@@ -407,14 +411,14 @@ def _read_planar_selection():
             continue
         subs = getattr(s, "SubElementNames", None) or []
         if subs:
-            sub = subs[0]
-            try:
-                el = obj.Shape.getElement(sub)
-                if (el is not None and el.ShapeType == "Face"
-                        and isinstance(el.Surface, Part.Plane)):
-                    return (obj.Name, sub)
-            except Exception:
-                continue
+            for sub in subs:
+                try:
+                    el = obj.Shape.getElement(sub)
+                    if (el is not None and el.ShapeType == "Face"
+                            and isinstance(el.Surface, Part.Plane)):
+                        return (obj.Name, sub)
+                except Exception:
+                    continue
         elif getattr(obj, "TypeId", "") in _PLANE_TYPE_IDS:
             return (obj.Name, "")
     return None

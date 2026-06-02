@@ -135,6 +135,21 @@ class TestClassifySupport:
     def test_sketch_is_other(self):
         assert _classify_support(_FakeObj("Sketcher::SketchObject")) == "other"
 
+    def test_solids_access_error_is_other(self):
+        class _Boom:
+            TypeId = "Part::Feature"
+            Name = "Boom"
+
+            @property
+            def Shape(self):
+                class _S:
+                    @property
+                    def Solids(self):
+                        raise RuntimeError("boom")
+                return _S()
+
+        assert _classify_support(_Boom()) == "other"
+
 
 class TestOwningBodyName:
     def test_object_in_body_returns_body_name(self):
