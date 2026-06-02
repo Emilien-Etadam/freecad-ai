@@ -139,9 +139,11 @@ being trusted** — unit tests and review cannot catch an invalid FreeCAD type
 ### Attachment / placement per mode
 
 - **edge:** `line.AttachmentSupport = [(support_obj, "Edge3")]`;
-  `line.MapMode = "OneEdge"`; `doc.recompute()`.
+  `line.MapMode = "Tangent"`; `doc.recompute()`. (`OneEdge` is a DatumPlane-only
+  MapMode; `PartDesign::Line` uses `Tangent` to make the line collinear with a
+  straight edge or origin axis, verified in integration testing.)
 - **origin:** resolve the origin axis via `_get_body_axis(body, axis)`;
-  `line.AttachmentSupport = [(axis_obj, "")]`; `line.MapMode = "OneEdge"`;
+  `line.AttachmentSupport = [(axis_obj, "")]`; `line.MapMode = "Tangent"`;
   `doc.recompute()`. If the axis can't be resolved, warn and leave the line at the
   document origin (mirrors datum_plane's origin-plane fallback).
 - **two-points:** no attachment. Set `line.Placement` so the line passes through
@@ -203,7 +205,7 @@ origin axis) are surfaced the same way datum_plane surfaces them.
   the two points (asserts the placement mechanism);
 - two-point line with `body_name` → `PartDesign::Line` created inside the Body;
 - edge-attached line on a Body feature → `PartDesign::Line` in the Body, attached
-  (`MapMode == "OneEdge"`, State not Invalid/Error);
+  (`MapMode == "Tangent"`, State not Invalid/Error);
 - edge on a **standalone** `Part::Feature` solid → standalone `PartDesign::Line`
   (created via `doc.addObject`), attached;
 - origin-axis line (`axis="Z"`, body) → attached to the Body's Z axis;
