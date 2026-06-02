@@ -14,6 +14,12 @@ Provides a GUI for configuring:
 import os
 
 from .compat import QtWidgets, QtCore, QtGui
+from .message_view import colors_from_palette
+from .theme_palette import (
+    label_muted_stylesheet,
+    label_status_stylesheet,
+    pushbutton_accent_stylesheet,
+)
 from ..i18n import translate
 
 QDialog = QtWidgets.QDialog
@@ -169,7 +175,23 @@ class _TestRerankerThread(QThread):
 
 
 class SettingsDialog(QDialog):
-    """Configuration dialog for FreeCAD AI."""
+    """Settings dialog with palette-aware status labels."""
+
+    def _palette_colors(self):
+        return colors_from_palette(self.palette())
+
+    def _apply_palette_styles(self):
+        muted = label_muted_stylesheet(self.palette())
+        self._vision_status_label.setStyleSheet(muted)
+        self._rerank_test_status.setStyleSheet(muted)
+        self.test_status.setStyleSheet(muted)
+        self.save_btn.setStyleSheet(
+            pushbutton_accent_stylesheet(self.palette(), padding="6px 24px"))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._apply_palette_styles()
+
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -450,7 +472,7 @@ class SettingsDialog(QDialog):
         vision_layout.addWidget(self.vision_check)
 
         self._vision_status_label = QLabel()
-        self._vision_status_label.setStyleSheet("color: #888;")
+        self._vision_status_label.setStyleSheet(label_muted_stylesheet(self.palette()))
         vision_layout.addWidget(self._vision_status_label)
 
         self._vision_reset_btn = QPushButton(translate("SettingsDialog", "Reset"))
@@ -612,7 +634,7 @@ class SettingsDialog(QDialog):
         test_layout.addWidget(self._rerank_test_btn)
         self._rerank_test_status = QLabel()
         self._rerank_test_status.setWordWrap(True)
-        self._rerank_test_status.setStyleSheet("color: #666;")
+        self._rerank_test_status.setStyleSheet(label_muted_stylesheet(self.palette()))
         test_layout.addWidget(self._rerank_test_status, 1)
         llm_form.addRow(test_layout)
 
@@ -786,11 +808,10 @@ class SettingsDialog(QDialog):
         btn_layout.addStretch()
 
         self.save_btn = QPushButton(translate("SettingsDialog", "Save"))
-        self.save_btn.setStyleSheet(
-            "QPushButton { padding: 6px 24px; font-weight: bold; }"
-        )
+        pass  # styled in _apply_palette_styles
         self.save_btn.clicked.connect(self._save)
         btn_layout.addWidget(self.save_btn)
+        self._apply_palette_styles()
 
         self.cancel_btn = QPushButton(translate("SettingsDialog", "Cancel"))
         self.cancel_btn.clicked.connect(self.reject)
@@ -1311,13 +1332,13 @@ class SettingsDialog(QDialog):
         if not model:
             self._rerank_test_status.setText(translate(
                 "SettingsDialog", "No model configured"))
-            self._rerank_test_status.setStyleSheet("color: #c62828;")
+            self._rerank_test_status.setStyleSheet(label_status_stylesheet(self._palette_colors()["tool_error_text"]))
             return
 
         self._rerank_test_btn.setEnabled(False)
         self._rerank_test_status.setText(translate(
             "SettingsDialog", "Testing..."))
-        self._rerank_test_status.setStyleSheet("color: #666;")
+        self._rerank_test_status.setStyleSheet(label_muted_stylesheet(self.palette()))
 
         self._rerank_test_thread = _TestRerankerThread(
             provider, base_url, api_key, model, model_params, self,
@@ -1332,11 +1353,11 @@ class SettingsDialog(QDialog):
         if success:
             self._rerank_test_status.setText(
                 translate("SettingsDialog", "OK") + " — " + message)
-            self._rerank_test_status.setStyleSheet("color: #2e7d32;")
+            self._rerank_test_status.setStyleSheet(label_status_stylesheet(self._palette_colors()["tool_success_text"]))
         else:
             self._rerank_test_status.setText(
                 translate("SettingsDialog", "Error") + ": " + message)
-            self._rerank_test_status.setStyleSheet("color: #c62828;")
+            self._rerank_test_status.setStyleSheet(label_status_stylesheet(self._palette_colors()["tool_error_text"]))
 
     def _load_rerank_default_params(self):
         """Reset the reranker params table to the reranker provider's defaults."""
@@ -1358,7 +1379,7 @@ class SettingsDialog(QDialog):
         self.save_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.test_status.setText(translate("SettingsDialog", "Testing..."))
-        self.test_status.setStyleSheet("color: #666;")
+        self.test_status.setStyleSheet(label_muted_stylesheet(self.palette()))
 
         self._test_thread = _TestConnectionThread(self)
         self._test_thread.finished.connect(self._on_test_finished)
@@ -1371,14 +1392,14 @@ class SettingsDialog(QDialog):
         if success:
             # Keep buttons disabled — vision probe is still running
             self.test_status.setText(message)
-            self.test_status.setStyleSheet("color: #2e7d32;")
+            self.test_status.setStyleSheet(label_status_stylesheet(self._palette_colors()["tool_success_text"]))
         else:
             # No vision probe on failure — re-enable buttons now
             self.test_btn.setEnabled(True)
             self.save_btn.setEnabled(True)
             self.cancel_btn.setEnabled(True)
             self.test_status.setText(translate("SettingsDialog", "Failed: ") + message)
-            self.test_status.setStyleSheet("color: #c62828;")
+            self.test_status.setStyleSheet(label_status_stylesheet(self._palette_colors()["tool_error_text"]))
 
     def _on_vision_probed(self, supports_vision: bool):
         """Handle vision probe result — persists to config immediately."""
