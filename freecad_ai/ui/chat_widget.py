@@ -38,16 +38,37 @@ from ..core.executor import extract_code_blocks, execute_code
 from ..core.loop_control import should_continue_loop
 from ..core.input_history import InputHistory
 from .message_view import (
-    _get_theme_colors,
+    colors_from_palette,
     get_chat_display_stylesheet,
     get_freecad_mode_name,
     refresh_theme_cache,
-    render_message,
-    render_code_block,
+    render_assistant_stream_open,
     render_execution_result,
+    render_hint,
+    render_message,
+    render_plan_buttons,
+    render_status_line,
+    render_thinking_stream_chunk,
+    render_thinking_stream_open,
     render_tool_call,
 )
+from .theme_palette import (
+    danger_banner_stylesheet,
+    pushbutton_accent_stylesheet,
+    pushbutton_loading_stylesheet,
+    qtextedit_palette_stylesheet,
+)
 from .code_review_dialog import CodeReviewDialog
+
+
+def _colors_for_widget(widget):
+    parent = widget
+    while parent is not None:
+        if hasattr(parent, "palette"):
+            return colors_from_palette(parent.palette())
+        parent = parent.parent()
+    from .message_view import _get_theme_colors
+    return _get_theme_colors()
 
 
 # Known binary file magic bytes — prevents misdetecting binary files as text
@@ -706,7 +727,7 @@ class _AttachmentStrip(QtWidgets.QWidget):
         if not pixmap.isNull():
             pixmap = pixmap.scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         label.setPixmap(pixmap)
-        colors = _get_theme_colors()
+        colors = _colors_for_widget(self)
         label.setStyleSheet(f"border: 1px solid {colors['chat_border']}; border-radius: 3px;")
         container_layout.addWidget(label)
 
@@ -730,7 +751,7 @@ class _AttachmentStrip(QtWidgets.QWidget):
         container_layout.setContentsMargins(4, 2, 4, 2)
         container_layout.setSpacing(4)
 
-        colors = _get_theme_colors()
+        colors = _colors_for_widget(self)
 
         # Filename label with truncation
         display_name = filename if len(filename) <= 24 else filename[:10] + "..." + filename[-10:]
@@ -1037,8 +1058,10 @@ class ChatDockWidget(QDockWidget):
             translate("ChatDockWidget",
                       "⚠ DANGEROUS MODE ACTIVE — safety checks disabled"))
         self.danger_banner.setStyleSheet(
-            "background-color: #b00020; color: white; font-weight: bold; "
-            "padding: 4px;")
+            danger_banner_stylesheet(
+                colors_from_palette(self.palette())["tool_error_border"],
+                self.palette().color(QtGui.QPalette.HighlightedText).name(),
+            ))
         self.danger_banner.setAlignment(QtCore.Qt.AlignCenter)
         self.danger_banner.setVisible(False)
         layout.addWidget(self.danger_banner)
@@ -1051,7 +1074,7 @@ class ChatDockWidget(QDockWidget):
         self.chat_display.setOpenExternalLinks(False)
         self.chat_display.setOpenLinks(False)
         self.chat_display.setFont(QFont("Sans", 10))
-        self.chat_display.setStyleSheet(get_chat_display_stylesheet())
+        self.chat_display.setStyleSheet(get_chat_display_stylesheet(self.palette()))
         self.chat_display.anchorClicked.connect(self._handle_anchor_click)
         layout.addWidget(self.chat_display, 1)
 
@@ -1066,11 +1089,7 @@ class ChatDockWidget(QDockWidget):
         self.input_edit.setPlaceholderText(translate("ChatDockWidget", "Describe what you want to create..."))
         self.input_edit.setMaximumHeight(80)
         self.input_edit.setFont(QFont("Sans", 10))
-        colors = _get_theme_colors()
-        self.input_edit.setStyleSheet(
-            f"QTextEdit {{ background-color: {colors['chat_bg']}; color: {colors['chat_text']}; "
-            f"border: 1px solid {colors['chat_border']}; }}"
-        )
+        self.input_edit.setStyleSheet(qtextedit_palette_stylesheet(self.palette()))
         self.input_edit.installEventFilter(self)
         self.input_edit.image_added.connect(self._on_image_added)
         self.input_edit.document_added.connect(self._on_document_added)
@@ -1087,11 +1106,7 @@ class ChatDockWidget(QDockWidget):
         btn_layout.addWidget(self._attach_btn)
 
         self.send_btn = QPushButton(translate("ChatDockWidget", "Send"))
-        self.send_btn.setMinimumHeight(30)
-        self.send_btn.setStyleSheet(
-            f"QPushButton {{ background-color: {colors['tool_success_border']}; color: white; "
-            f"font-weight: bold; padding: 8px 16px; }}"
-        )
+        self.send_btn.setStyleSheet(pushbutton_accent_stylesheet(self.palette()))
         self.send_btn.clicked.connect(self._send_message)
         btn_layout.addWidget(self.send_btn)
 
@@ -1239,27 +1254,23 @@ class ChatDockWidget(QDockWidget):
 
     def _apply_theme(self):
         """Reapply all theme-dependent stylesheets."""
-        colors = _get_theme_colors()
+        colors = colors_from_palette(self.palette())
         theme_name = get_freecad_mode_name(force_refresh=True)
         self._resolve_stylesheet_conflict(theme_name)
         self._capture_btn.setStyleSheet(self._capture_btn_stylesheet())
-        self.chat_display.setStyleSheet(get_chat_display_stylesheet())
-        self.input_edit.setStyleSheet(
-            f"QTextEdit {{ background-color: {colors['chat_bg']}; color: {colors['chat_text']}; "
-            f"border: 1px solid {colors['chat_border']}; }}"
-        )
+        self.chat_display.setStyleSheet(get_chat_display_stylesheet(self.palette()))
+        self.input_edit.setStyleSheet(qtextedit_palette_stylesheet(self.palette()))
         if not self.send_btn.isEnabled():
-            # Loading state
-            self.send_btn.setStyleSheet(
-                f"QPushButton {{ background-color: {colors['system_label']}; color: white; "
-                f"font-weight: bold; padding: 8px 16px; }}"
-            )
+            self.send_btn.setStyleSheet(pushbutton_loading_stylesheet(self.palette()))
         else:
-            self.send_btn.setStyleSheet(
-                f"QPushButton {{ background-color: {colors['tool_success_border']}; color: white; "
-                f"font-weight: bold; padding: 8px 16px; }}"
-            )
+            self.send_btn.setStyleSheet(pushbutton_accent_stylesheet(self.palette()))
         self.token_label.setStyleSheet(f"color: {colors['thinking_text']}; font-size: 11px;")
+        colors_banner = colors_from_palette(self.palette())
+        self.danger_banner.setStyleSheet(
+            danger_banner_stylesheet(
+                colors_banner['tool_error_border'],
+                self.palette().color(QtGui.QPalette.HighlightedText).name(),
+            ))
 
     # ── Input history ───────────────────────────────────────
 
@@ -1408,11 +1419,10 @@ class ChatDockWidget(QDockWidget):
         cfg = get_config()
         if pending_images and cfg.vision_detected is None and not self._vision_hint_shown:
             self._vision_hint_shown = True
-            self._append_html(
-                '<div style="color: #888; font-size: 9pt; margin: 4px 12px;">'
-                'Tip: click Test Connection in Settings to enable vision auto-detection.'
-                '</div>'
-            )
+            self._append_html(render_hint(
+                'Tip: click Test Connection in Settings to enable vision auto-detection.',
+                palette=self.palette(),
+            ))
 
         # Collect attached images
         images = pending_images or None
@@ -1824,14 +1834,12 @@ class ChatDockWidget(QDockWidget):
 
     def _compact_and_send(self):
         """Compact conversation by summarizing older messages, then continue sending."""
-        self._append_html(
-            '<div style="margin: 4px 0; padding: 6px 10px; '
-            'background-color: #fff3e0; border-left: 3px solid #ff9800; '
-            'border-radius: 0 4px 4px 0; font-size: 12px; color: #e65100;">'
-            '{}</div>'.format(
-                translate("ChatDockWidget", "Compacting context (~{}k tokens)...").format(
-                    self.conversation.estimated_tokens() // 1000))
-        )
+        self._append_html(render_status_line(
+            translate("ChatDockWidget", "Compacting context (~{}k tokens)...").format(
+                self.conversation.estimated_tokens() // 1000),
+            variant="warning",
+            palette=self.palette(),
+        ))
 
         # Build summary of older messages (all except last 4)
         keep_recent = 4
@@ -1874,14 +1882,12 @@ class ChatDockWidget(QDockWidget):
         """Handle compaction result and continue sending."""
         if summary:
             self.conversation.compact(summary, keep_recent=4)
-            self._append_html(
-                '<div style="margin: 4px 0; padding: 6px 10px; '
-                'background-color: #e8f5e9; border-left: 3px solid #4caf50; '
-                'border-radius: 0 4px 4px 0; font-size: 12px; color: #2e7d32;">'
-                '{}</div>'.format(
-                    translate("ChatDockWidget", "Context compacted to ~{}k tokens").format(
-                        self.conversation.estimated_tokens() // 1000))
-            )
+            self._append_html(render_status_line(
+                translate("ChatDockWidget", "Context compacted to ~{}k tokens").format(
+                    self.conversation.estimated_tokens() // 1000),
+                variant="success",
+                palette=self.palette(),
+            ))
         self._set_loading(False)
         self._update_token_count()
         # Continue with the normal send flow
@@ -2008,12 +2014,7 @@ class ChatDockWidget(QDockWidget):
         # Start streaming
         self._set_loading(True)
         self._streaming_html = ""
-        self._append_html(
-            '<div style="margin: 8px 0; padding: 8px 12px; '
-            'background-color: #f5f5f5; border-radius: 6px;">'
-            '<div style="font-weight: bold; color: #2e7d32; margin-bottom: 4px;">AI</div>'
-            '<div style="white-space: pre-wrap;">'
-        )
+        self._append_html(render_assistant_stream_open(palette=self.palette()))
 
         self._in_thinking = False
         self._tool_results_stored = False
@@ -2131,13 +2132,7 @@ class ChatDockWidget(QDockWidget):
             # Start a thinking block
             cursor = self.chat_display.textCursor()
             cursor.movePosition(QTextCursor.End)
-            cursor.insertHtml(
-                '<div style="margin: 4px 0; padding: 4px 8px; '
-                'background-color: #f0f0f0; border-left: 2px solid #ccc; '
-                'font-size: 11px; color: #888; font-style: italic;">'
-                '<span style="color: #aaa;">{}</span><br>'.format(
-                    translate("ChatDockWidget", "Thinking..."))
-            )
+            cursor.insertHtml(render_thinking_stream_open(palette=self.palette()))
             self.chat_display.setTextCursor(cursor)
 
         escaped = html_mod.escape(chunk)
@@ -2145,7 +2140,7 @@ class ChatDockWidget(QDockWidget):
 
         cursor = self.chat_display.textCursor()
         cursor.movePosition(QTextCursor.End)
-        cursor.insertHtml(f'<span style="color: #999; font-size: 11px;">{escaped}</span>')
+        cursor.insertHtml(render_thinking_stream_chunk(chunk, palette=self.palette()))
         self.chat_display.setTextCursor(cursor)
         self.chat_display.ensureCursorVisible()
 
@@ -2247,7 +2242,7 @@ class ChatDockWidget(QDockWidget):
         if self._worker and self._worker._tool_timeline and not getattr(self, '_summary_rendered', False):
             self._summary_rendered = True
             from .message_view import render_tool_summary
-            self._append_html(render_tool_summary(self._worker._tool_timeline))
+            self._append_html(render_tool_summary(self._worker._tool_timeline, palette=self.palette()))
 
         # Handle code execution based on mode (only if tools were NOT used)
         mode = "plan" if self.mode_combo.currentIndex() == 0 else "act"
@@ -2394,21 +2389,19 @@ class ChatDockWidget(QDockWidget):
     @Slot(str, str)
     def _on_tool_call_started(self, tool_name, call_id):
         """Render tool call start in the chat."""
-        self._append_html(render_tool_call(tool_name, call_id, started=True))
+        self._append_html(render_tool_call(tool_name, call_id, started=True, palette=self.palette()))
 
     @Slot(str, str, bool, str)
     def _on_tool_call_finished(self, tool_name, call_id, success, output):
         """Render tool call result in the chat."""
         self._append_html(render_tool_call(
-            tool_name, call_id, started=False, success=success, output=output
+            tool_name, call_id, started=False, success=success, output=output,
+            palette=self.palette(),
         ))
 
     def _on_vision_note(self, message: str):
         """Show a subtle note when images are auto-described."""
-        self._append_html(
-            f'<div style="color: #888; font-size: 9pt; margin: 2px 12px;">'
-            f'{message}</div>'
-        )
+        self._append_html(render_hint(message, palette=self.palette()))
 
     @Slot(str, str)
     def _execute_tool_call(self, tool_name, arguments_json):
@@ -2456,7 +2449,8 @@ class ChatDockWidget(QDockWidget):
                     continue
 
             self._append_html(render_execution_result(
-                result.success, result.stdout, result.stderr
+                result.success, result.stdout, result.stderr,
+                palette=self.palette(),
             ))
 
             if result.success:
@@ -2509,12 +2503,7 @@ class ChatDockWidget(QDockWidget):
 
         self._set_loading(True)
         self._streaming_html = ""
-        self._append_html(
-            '<div style="margin: 8px 0; padding: 8px 12px; '
-            'background-color: #f5f5f5; border-radius: 6px;">'
-            '<div style="font-weight: bold; color: #2e7d32; margin-bottom: 4px;">AI</div>'
-            '<div style="white-space: pre-wrap;">'
-        )
+        self._append_html(render_assistant_stream_open(palette=self.palette()))
 
         self._tool_results_stored = False
         self._worker = _LLMWorker(messages, system_prompt, parent=self)
@@ -2539,7 +2528,8 @@ class ChatDockWidget(QDockWidget):
 
         if result:
             self._append_html(render_execution_result(
-                result.success, result.stdout, result.stderr
+                result.success, result.stdout, result.stderr,
+                palette=self.palette(),
             ))
             if result.success:
                 self.conversation.add_system_message(
@@ -2630,20 +2620,21 @@ class ChatDockWidget(QDockWidget):
                 elif msg["role"] == "assistant" and msg.get("tool_calls"):
                     # Render assistant text + tool call indicators
                     if msg.get("content"):
-                        html_parts.append(render_message("assistant", msg["content"]))
+                        html_parts.append(render_message("assistant", msg["content"], palette=self.palette()))
                     for tc in msg["tool_calls"]:
                         html_parts.append(render_tool_call(
                             tc["name"], tc["id"], started=False, success=True,
-                            output=f"Called with: {json.dumps(tc['arguments'], indent=2)}"
+                            output=f"Called with: {json.dumps(tc['arguments'], indent=2)}",
+                            palette=self.palette(),
                         ))
                 else:
-                    html_parts.append(render_message(msg["role"], msg.get("content", "")))
+                    html_parts.append(render_message(msg["role"], msg.get("content", ""), palette=self.palette()))
 
                 if mode == "plan" and msg["role"] == "assistant":
                     content = Conversation.extract_text(msg.get("content", ""))
                     code_blocks = extract_code_blocks(content)
                     for code in code_blocks:
-                        html_parts.append(self._make_plan_buttons_html(code))
+                        html_parts.append(render_plan_buttons(code, palette=self.palette()))
 
             full_html = "".join(html_parts)
             self.chat_display.setHtml(full_html)
@@ -2655,23 +2646,7 @@ class ChatDockWidget(QDockWidget):
 
     def _make_plan_buttons_html(self, code):
         """Create HTML for Plan mode Execute/Copy buttons."""
-        import base64
-        encoded = base64.b64encode(code.encode()).decode()
-        return (
-            '<div style="margin: 2px 0 8px 0;">'
-            '<a href="execute:{encoded}" style="text-decoration: none; '
-            'background-color: #2e7d32; color: white; padding: 3px 12px; '
-            'border-radius: 3px; font-size: 12px; margin-right: 6px;">'
-            '{execute}</a> '
-            '<a href="copy:{encoded}" style="text-decoration: none; '
-            'background-color: #666; color: white; padding: 3px 12px; '
-            'border-radius: 3px; font-size: 12px;">{copy}</a>'
-            '</div>'.format(
-                encoded=encoded,
-                execute=translate("ChatDockWidget", "Execute"),
-                copy=translate("ChatDockWidget", "Copy"),
-            )
-        )
+        return render_plan_buttons(code, palette=self.palette())
 
     def _handle_anchor_click(self, url):
         """Handle clicks on anchor links in the chat (Execute/Copy/Image buttons)."""
@@ -2738,21 +2713,14 @@ class ChatDockWidget(QDockWidget):
 
     def _set_loading(self, loading):
         """Enable/disable input while LLM is processing."""
-        colors = _get_theme_colors()
         self.send_btn.setEnabled(True)
         self.input_edit.setReadOnly(loading)
         if loading:
             self.send_btn.setText("Stop")
-            self.send_btn.setStyleSheet(
-                f"QPushButton {{ background-color: {colors['system_label']}; color: white; "
-                f"font-weight: bold; padding: 8px 16px; }}"
-            )
+            self.send_btn.setStyleSheet(pushbutton_loading_stylesheet(self.palette()))
         else:
             self.send_btn.setText(translate("ChatDockWidget", "Send"))
-            self.send_btn.setStyleSheet(
-                f"QPushButton {{ background-color: {colors['tool_success_border']}; color: white; "
-                f"font-weight: bold; padding: 8px 16px; }}"
-            )
+            self.send_btn.setStyleSheet(pushbutton_accent_stylesheet(self.palette()))
 
     def _update_token_count(self):
         """Update the token estimate display."""
@@ -2784,24 +2752,20 @@ class ChatDockWidget(QDockWidget):
                 self._mcp_connected = True
             new_servers = set(manager.connected_servers) - prev_servers
             if new_servers:
-                self._append_html(
-                    '<div style="margin: 4px 0; padding: 4px 8px; '
-                    'background-color: #e8f5e9; border-left: 3px solid #4caf50; '
-                    'border-radius: 0 4px 4px 0; font-size: 11px; color: #2e7d32;">'
-                    '{}</div>'.format(
-                        translate("ChatDockWidget", "MCP: connected to {}").format(
-                            ", ".join(sorted(new_servers))))
-                )
+                self._append_html(render_status_line(
+                    translate("ChatDockWidget", "MCP: connected to {}").format(
+                        ", ".join(sorted(new_servers))),
+                    variant="success",
+                    palette=self.palette(),
+                ))
         except Exception as e:
             if only_deferred is None or only_deferred is True:
                 self._mcp_connected = True  # Don't retry on failure
-            self._append_html(
-                '<div style="margin: 4px 0; padding: 4px 8px; '
-                'background-color: #fff3e0; border-left: 3px solid #ff9800; '
-                'border-radius: 0 4px 4px 0; font-size: 11px; color: #e65100;">'
-                '{}</div>'.format(
-                    translate("ChatDockWidget", "MCP connection error: {}").format(str(e)))
-            )
+            self._append_html(render_status_line(
+                translate("ChatDockWidget", "MCP connection error: {}").format(str(e)),
+                variant="warning",
+                palette=self.palette(),
+            ))
 
     def closeEvent(self, event):
         """Save conversation, dock layout, and disconnect MCP when widget is closed."""
