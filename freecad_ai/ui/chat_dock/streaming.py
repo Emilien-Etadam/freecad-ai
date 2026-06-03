@@ -10,6 +10,7 @@ from ..message_view import (
     render_execution_result,
     render_thinking_stream_open,
     render_thinking_stream_chunk,
+    render_tool_summary,
 )
 from ...core.executor import extract_code_blocks
 from ..chat_workers import _LLMWorker
@@ -145,7 +146,6 @@ class ChatDockStreamingMixin:
         # Tool call summary (after re-render so it's not wiped)
         if self._worker and self._worker._tool_timeline and not getattr(self, '_summary_rendered', False):
             self._summary_rendered = True
-            from .message_view import render_tool_summary
             self._append_html(self._render_tool_summary(self._worker._tool_timeline))
 
         # Handle code execution based on mode (only if tools were NOT used)
@@ -169,7 +169,6 @@ class ChatDockStreamingMixin:
 
     def _run_post_validation(self):
         """Run geometry validation after skill completes."""
-        from .message_view import render_message
 
         skill_name = getattr(self, "_active_skill_name", "")
         if not skill_name:

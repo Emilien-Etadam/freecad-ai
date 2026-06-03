@@ -97,7 +97,7 @@ class ChatDockSessionMixin:
         except ImportError:
             parent = self
 
-        from .compat import QtWidgets as _QtWidgets
+        from ..compat import QtWidgets as _QtWidgets
         selected, ok = _QtWidgets.QInputDialog.getItem(
             parent, translate("ChatDockWidget", "Load Chat Session"),
             translate("ChatDockWidget", "Select a session to resume:"),

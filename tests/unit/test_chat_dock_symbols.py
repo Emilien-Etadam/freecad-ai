@@ -16,6 +16,7 @@ _REQUIRED = {
     "streaming.py": [
         "from ...core.executor import extract_code_blocks",
         "CHAT_STREAM_END",
+        "render_tool_summary",
     ],
     "ui.py": [
         "from ..chat_attachments import _AttachmentStrip",
@@ -32,3 +33,15 @@ def test_chat_dock_required_imports_present():
             if needle not in text:
                 missing.append(f"{filename}: {needle}")
     assert not missing, "Missing imports:\n" + "\n".join(missing)
+
+
+def test_chat_dock_no_single_dot_ui_imports():
+    """from .message_view in chat_dock resolves to freecad_ai.ui.chat_dock.message_view (missing)."""
+    bad = []
+    for path in _ROOT.glob("*.py"):
+        if path.name == "__init__.py":
+            continue
+        for i, line in enumerate(path.read_text().splitlines(), 1):
+            if "from .message_view" in line or "from .compat import" in line or "from .settings_dialog" in line:
+                bad.append(f"{path.name}:{i}: {line.strip()}")
+    assert not bad, "Bad imports:\n" + "\n".join(bad)
