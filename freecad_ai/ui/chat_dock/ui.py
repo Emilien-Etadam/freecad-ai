@@ -10,6 +10,7 @@ from ..message_view import (
     refresh_theme_cache,
 )
 from ..chat_constants import _STYLESHEET_CONFLICT_THEMES, _CAPTURE_MODE_COLORS
+from ..chat_attachments import _AttachmentStrip, _ImageAwareTextEdit
 from ..theme_palette import (
     qtextedit_palette_stylesheet,
     pushbutton_accent_stylesheet,
