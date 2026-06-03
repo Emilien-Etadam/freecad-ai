@@ -272,6 +272,57 @@ def get_chat_display_stylesheet(palette=None) -> str:
     )
 
 
+
+def _chat_message_html(role, label, label_color, bg_color, body_html, palette=None, *, open_content=False):
+    """Wrap message HTML for QTextBrowser (block bubbles, user right / AI left)."""
+    colors = _resolve_colors(palette)
+    text_color = colors.get("chat_text", "#e0e0e0")
+    safe_label = html.escape(label)
+
+    if role == "user":
+        row_style = "display:block; clear:both; margin:10px 0 8px 0; text-align:right;"
+        bubble_style = (
+            "display:inline-block; max-width:88%; text-align:left; "
+            f"background-color:{bg_color}; border-radius:14px 14px 4px 14px; "
+            "padding:10px 14px;"
+        )
+    elif role == "assistant":
+        row_style = "display:block; clear:both; margin:10px 0 8px 0; text-align:left;"
+        bubble_style = (
+            "display:inline-block; max-width:88%; text-align:left; "
+            f"background-color:{bg_color}; border-radius:14px 14px 14px 4px; "
+            "padding:10px 14px;"
+        )
+    else:
+        row_style = "display:block; clear:both; margin:8px 0;"
+        bubble_style = (
+            "display:block; max-width:92%; text-align:left; "
+            f"background-color:{bg_color}; border-radius:6px; "
+            f"padding:8px 12px; border-left:3px solid {label_color};"
+        )
+
+    label_style = (
+        f"font-size:10px; font-weight:bold; color:{label_color}; "
+        "margin-bottom:6px; text-transform:uppercase; letter-spacing:0.4px;"
+    )
+    body_style = (
+        f"white-space:pre-wrap; word-wrap:break-word; color:{text_color};"
+    )
+
+    head = (
+        f'<div style="{row_style}">'
+        f'<div style="{bubble_style}">'
+        f'<div style="{label_style}">{safe_label}</div>'
+        f'<div style="{body_style}">'
+    )
+    if open_content:
+        return head
+    return head + body_html + "</div></div></div>"
+
+
+CHAT_STREAM_END = "</div></div></div>"
+
+
 def render_message(role: str, content, palette=None) -> str:
     """Render a single chat message as an HTML block."""
     global _RENDER_PALETTE
@@ -295,13 +346,8 @@ def render_message(role: str, content, palette=None) -> str:
             formatted_content = _format_content_blocks(content)
         else:
             formatted_content = _format_content(content)
-        return (
-            f'<div style="margin: 8px 0; padding: 8px 12px; '
-            f'background-color: {bg_color}; border-radius: 6px;">'
-            f'<div style="font-weight: bold; color: {label_color}; '
-            f'margin-bottom: 4px;">{label}</div>'
-            f'<div style="white-space: pre-wrap;">{formatted_content}</div>'
-            f'</div>'
+        return _chat_message_html(
+            role, label, label_color, bg_color, formatted_content, palette=palette,
         )
     finally:
         _RENDER_PALETTE = old_palette
@@ -627,14 +673,16 @@ def render_status_line(text: str, variant: str = "info", palette=None) -> str:
 
 
 def render_assistant_stream_open(palette=None) -> str:
-    """Open an assistant streaming message container."""
+    """Open an assistant streaming message container (closes with CHAT_STREAM_END)."""
     colors = _resolve_colors(palette)
-    return (
-        f'<div style="margin: 8px 0; padding: 8px 12px; '
-        f'background-color: {colors["assistant_bg"]}; border-radius: 6px;">'
-        f'<div style="font-weight: bold; color: {colors["assistant_label"]}; '
-        f'margin-bottom: 4px;">{translate("MessageView", "AI")}</div>'
-        f'<div style="white-space: pre-wrap;">'
+    return _chat_message_html(
+        "assistant",
+        translate("MessageView", "AI"),
+        colors["assistant_label"],
+        colors["assistant_bg"],
+        "",
+        palette=palette,
+        open_content=True,
     )
 
 

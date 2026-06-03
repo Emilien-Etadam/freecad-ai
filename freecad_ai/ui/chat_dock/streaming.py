@@ -112,7 +112,7 @@ class ChatDockStreamingMixin:
         # Close the streaming div
         cursor = self.chat_display.textCursor()
         cursor.movePosition(QTextCursor.End)
-        cursor.insertHtml("</div></div>")
+        cursor.insertHtml(CHAT_STREAM_END)
 
         # Store in conversation - include any tool call info from the worker
         self._store_tool_results(full_response)
@@ -249,7 +249,7 @@ class ChatDockStreamingMixin:
         # Close the streaming div
         cursor = self.chat_display.textCursor()
         cursor.movePosition(QTextCursor.End)
-        cursor.insertHtml("</div></div>")
+        cursor.insertHtml(CHAT_STREAM_END)
 
         # Store any tool results that were collected before the error
         self._store_tool_results()

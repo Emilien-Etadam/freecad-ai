@@ -27,6 +27,10 @@ class ChatDockDisplayMixin:
         """Append HTML to the chat display and scroll to bottom."""
         cursor = self.chat_display.textCursor()
         cursor.movePosition(QTextCursor.End)
+        # QTextBrowser merges consecutive insertHtml into one block; start a new
+        # paragraph so the next bubble (e.g. AI after You) is not inline.
+        if not self.chat_display.document().isEmpty():
+            cursor.insertBlock()
         cursor.insertHtml(html_str)
         self.chat_display.setTextCursor(cursor)
         self.chat_display.ensureCursorVisible()
