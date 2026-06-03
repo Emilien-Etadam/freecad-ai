@@ -4,6 +4,7 @@ import html as html_mod
 from ..compat import QtWidgets, QtCore, QtGui
 from ...i18n import translate
 from ..message_view import (
+    CHAT_STREAM_END,
     render_message,
     render_tool_call,
     render_execution_result,
@@ -26,6 +27,7 @@ class ChatDockStreamingMixin:
     def _on_thinking(self, chunk):
         """Handle a thinking/reasoning delta — render dimmed."""
         import html as html_mod
+        self._set_chat_activity("think")
         if not self._in_thinking:
             self._in_thinking = True
             # Start a thinking block
@@ -47,6 +49,8 @@ class ChatDockStreamingMixin:
     def _on_token(self, chunk):
         """Handle a streamed token — append to the display."""
         import html as html_mod
+
+        self._set_chat_activity("respond")
 
         # Close thinking block if transitioning from thinking to regular content
         if self._in_thinking:
@@ -288,6 +292,7 @@ class ChatDockStreamingMixin:
     @Slot(str, str)
     def _on_tool_call_started(self, tool_name, call_id):
         """Render tool call start in the chat."""
+        self._set_chat_activity("tool", tool_name)
         self._append_html(self._render_tool_call(tool_name, call_id, started=True))
 
     @Slot(str, str, bool, str)

@@ -671,6 +671,23 @@ def render_status_line(text: str, variant: str = "info", palette=None) -> str:
     )
 
 
+
+
+def render_stream_activity_hint(palette=None, kind: str = "connecting") -> str:
+    """Italic line inside the open assistant bubble while waiting for output."""
+    colors = _resolve_colors(palette)
+    if kind == "thinking":
+        msg = translate("MessageView", "Reflecting…")
+    elif kind == "responding":
+        msg = translate("MessageView", "Writing response…")
+    else:
+        msg = translate("MessageView", "Waiting for model…")
+    return (
+        f'<span style="color:{colors["thinking_label"]}; font-style:italic; '
+        f'font-size:10pt;">{html.escape(msg)}</span><br/>'
+    )
+
+
 def render_assistant_stream_open(palette=None) -> str:
     """Open an assistant streaming message container (closes with CHAT_STREAM_END)."""
     colors = _resolve_colors(palette)
@@ -686,15 +703,17 @@ def render_assistant_stream_open(palette=None) -> str:
 
 
 def render_thinking_stream_open(palette=None) -> str:
-    """Open a live thinking stream block."""
+    """Open a live thinking/reasoning stream block inside the assistant bubble."""
     colors = _resolve_colors(palette)
     return (
-        f'<div style="margin: 4px 0; padding: 4px 8px; '
-        f'background-color: {colors["thinking_bg"]}; '
-        f'border-left: 2px solid {colors["thinking_border"]}; '
-        f'font-size: 11px; color: {colors["thinking_text"]}; font-style: italic;">'
-        f'<span style="color: {colors["thinking_label"]};">'
-        f'{translate("MessageView", "Thinking...")}</span><br>'
+        f'<div style="margin:8px 0 4px 0; padding:8px 10px; '
+        f'background-color:{colors["thinking_bg"]}; '
+        f'border-left:3px solid {colors["thinking_border"]}; '
+        f'font-size:10pt; color:{colors["thinking_text"]}; font-style:italic;">'
+        f'<span style="color:{colors["thinking_label"]}; font-weight:bold;">'
+        f'{translate("MessageView", "Reflection")}</span> '
+        f'<span style="color:{colors["thinking_text"]};">'
+        f'({translate("MessageView", "in progress")})</span><br/>'
     )
 
 

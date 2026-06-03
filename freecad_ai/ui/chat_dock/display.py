@@ -138,6 +138,60 @@ class ChatDockDisplayMixin:
                     dlg.show()
                     return
 
+
+    def _ensure_activity_timer(self):
+        if getattr(self, "_activity_timer", None) is not None:
+            return
+        self._activity_timer = QtCore.QTimer(self)
+        self._activity_timer.setInterval(450)
+        self._activity_timer.timeout.connect(self._tick_activity_label)
+
+    def _set_chat_activity(self, phase: str, detail: str = ""):
+        """Show live status in the footer (reflection, response, tool, etc.)."""
+        if not hasattr(self, "activity_label"):
+            return
+        self._activity_phase = phase or ""
+        self._activity_detail = detail or ""
+        if phase in ("", "idle"):
+            self._ensure_activity_timer()
+            self._activity_timer.stop()
+            self.activity_label.setText("")
+            self.activity_label.setToolTip("")
+            return
+        templates = {
+            "connect": translate("ChatDockWidget", "Waiting for the model"),
+            "think": translate("ChatDockWidget", "Reflecting"),
+            "respond": translate("ChatDockWidget", "Writing response"),
+            "tool": translate("ChatDockWidget", "Running tool: {}"),
+            "compact": translate("ChatDockWidget", "Compacting context"),
+        }
+        base = templates.get(phase, "")
+        if phase == "tool" and detail:
+            base = base.format(detail)
+        elif phase == "tool":
+            base = translate("ChatDockWidget", "Running tool…")
+        self._activity_base_text = base
+        self._activity_tick = 0
+        self._tick_activity_label()
+        self._ensure_activity_timer()
+        self._activity_timer.start()
+        tips = {
+            "connect": translate("ChatDockWidget", "The model is starting. If this lasts, check Settings."),
+            "think": translate("ChatDockWidget", "Reasoning tokens stream here when the model supports thinking."),
+            "respond": translate("ChatDockWidget", "Answer text is streaming."),
+            "tool": translate("ChatDockWidget", "FreeCAD is executing a tool on the document."),
+            "compact": translate("ChatDockWidget", "Summarizing older messages to free context."),
+        }
+        self.activity_label.setToolTip(tips.get(phase, ""))
+
+    def _tick_activity_label(self):
+        if not getattr(self, "_activity_phase", "") or not hasattr(self, "activity_label"):
+            return
+        dots = "." * ((getattr(self, "_activity_tick", 0) % 3) + 1)
+        self._activity_tick = getattr(self, "_activity_tick", 0) + 1
+        self.activity_label.setText(getattr(self, "_activity_base_text", "") + dots)
+
+
     def _set_loading(self, loading):
         """Enable/disable input while LLM is processing."""
         from ..theme_palette import pushbutton_loading_stylesheet, pushbutton_accent_stylesheet
@@ -149,6 +203,7 @@ class ChatDockDisplayMixin:
         else:
             self.send_btn.setText(translate("ChatDockWidget", "Send"))
             self.send_btn.setStyleSheet(pushbutton_accent_stylesheet(self.palette()))
+            self._set_chat_activity("idle")
 
     def _update_token_count(self):
         """Update the token estimate display."""

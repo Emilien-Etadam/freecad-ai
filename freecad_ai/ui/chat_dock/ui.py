@@ -173,6 +173,11 @@ class ChatDockUIMixin:
 
         footer.addStretch()
 
+        self.activity_label = QLabel("")
+        self.activity_label.setStyleSheet(
+            f"color: {colors['assistant_label']}; font-size: 11px; font-style: italic;")
+        footer.addWidget(self.activity_label)
+
         self.token_label = QLabel(translate("ChatDockWidget", "tokens: ~0"))
         self.token_label.setStyleSheet(f"color: {colors['thinking_text']}; font-size: 11px;")
         footer.addWidget(self.token_label)

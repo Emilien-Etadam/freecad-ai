@@ -117,6 +117,8 @@ class ChatDockWidget(
         self._anchor_connected = False
         self._tool_registry = None
         self._in_thinking = False  # Whether currently rendering thinking content
+        self._activity_phase = ""
+        self._activity_timer = None
         self._capture_mode_override = None  # Session-only viewport capture override
         self._pending_viewport_image = None  # Viewport image queued by after_changes mode
         self._mcp_connected = False

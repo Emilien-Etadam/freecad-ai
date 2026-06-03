@@ -5,7 +5,11 @@ import time
 from ..compat import QtWidgets, QtCore, QtGui
 from ...config import LOGS_DIR, get_config, prune_oldest_files, save_current_config
 from ...i18n import translate
-from ..message_view import render_message, render_assistant_stream_open
+from ..message_view import (
+    render_message,
+    render_assistant_stream_open,
+    render_stream_activity_hint,
+)
 from ..chat_utils import _run_reranker, _extract_latest_user_text, _is_binary_content
 from ..chat_workers import _LLMWorker, _CompactionWorker
 from ..chat_constants import TEXT_FILE_EXTENSIONS
@@ -104,6 +108,7 @@ class ChatDockSendMixin:
 
     def _compact_and_send(self):
         """Compact conversation by summarizing older messages, then continue sending."""
+        self._set_chat_activity("compact")
         self._append_html(
             '<div style="margin: 4px 0; padding: 6px 10px; '
             'background-color: #fff3e0; border-left: 3px solid #ff9800; '
@@ -289,6 +294,11 @@ class ChatDockSendMixin:
         self._set_loading(True)
         self._streaming_html = ""
         self._append_html(render_assistant_stream_open(palette=self.palette()))
+        hint_kind = "thinking" if cfg.thinking != "off" else "connecting"
+        self._append_html(render_stream_activity_hint(self.palette(), hint_kind))
+        self._set_chat_activity(
+            "think" if cfg.thinking != "off" else "connect",
+        )
 
         self._in_thinking = False
         self._tool_results_stored = False
