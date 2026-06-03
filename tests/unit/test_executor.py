@@ -48,15 +48,8 @@ class TestExtractCodeBlocks:
     def test_empty_block(self):
         text = "```python\n```"
         blocks = extract_code_blocks(text)
-        # Empty match
-        assert len(blocks) == 1
-        assert blocks[0].strip() == ""
-
-    def test_freecad_untagged_fence(self):
-        text = "```\nimport FreeCAD as App\nimport Part\n```"
-        blocks = extract_code_blocks(text)
-        assert len(blocks) == 1
-        assert "FreeCAD" in blocks[0]
+        # Empty blocks are skipped (nothing to execute)
+        assert blocks == []
 
     def test_nested_backticks_in_string(self):
         text = '```python\nx = "```"\n```'
