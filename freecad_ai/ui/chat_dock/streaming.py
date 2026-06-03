@@ -152,8 +152,25 @@ class ChatDockStreamingMixin:
         mode = "plan" if self.mode_combo.currentIndex() == 0 else "act"
         if not (self._worker and self._worker._tool_results):
             code_blocks = extract_code_blocks(full_response)
+            if not code_blocks:
+                for msg in reversed(self.conversation.messages):
+                    if msg.get("role") != "assistant":
+                        continue
+                    content = msg.get("content", "")
+                    if isinstance(content, str):
+                        code_blocks = extract_code_blocks(content)
+                    break
             if code_blocks and mode == "act":
                 self._handle_act_mode(code_blocks)
+            elif mode == "act" and full_response.strip():
+                self._append_html(self._render_message(
+                    "system",
+                    translate(
+                        "ChatDockWidget",
+                        "Act mode: no Python code block found to run. "
+                        "Use a ```python fenced block or enable tool calling in Settings.",
+                    ),
+                ))
 
         # After-changes viewport capture: queue screenshot for next message
         capture_mode = self._capture_mode_override or get_config().viewport_capture

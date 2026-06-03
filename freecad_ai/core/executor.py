@@ -33,12 +33,35 @@ class ExecutionResult:
 
 
 # Regex to extract ```python ... ``` code blocks
-CODE_BLOCK_RE = re.compile(r"```python\s*\n(.*?)```", re.DOTALL)
+CODE_BLOCK_RE = re.compile(
+    r"```(?:python|py)\s*\r?\n(.*?)```",
+    re.DOTALL | re.IGNORECASE,
+)
+_GENERIC_FENCE_RE = re.compile(r"```\s*\r?\n(.*?)```", re.DOTALL)
 
 
 def extract_code_blocks(text: str) -> list[str]:
     """Extract all Python code blocks from markdown-formatted text."""
-    return CODE_BLOCK_RE.findall(text)
+    blocks = CODE_BLOCK_RE.findall(text)
+    if blocks:
+        return [b for b in blocks if b.strip()]
+    py_like = []
+    for block in _GENERIC_FENCE_RE.findall(text):
+        snippet = block.strip()
+        if not snippet:
+            continue
+        head = snippet[:400].lower()
+        if any(
+            k in head
+            for k in (
+                "import freecad",
+                "import part",
+                "freecad as app",
+                "app.activedocument",
+            )
+        ):
+            py_like.append(block)
+    return py_like
 
 
 def _find_freecad_cmd() -> str:

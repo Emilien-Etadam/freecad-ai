@@ -1,5 +1,6 @@
 """Plan/Act code execution and skill command shortcuts."""
 from ..compat import QtWidgets, QtCore, QtGui
+from ...config import get_config
 from ...core.executor import extract_code_blocks, execute_code
 from ...i18n import translate
 from ..message_view import render_code_block, render_execution_result
@@ -15,26 +16,12 @@ class ChatDockCodeMixin:
     # ── Code execution ──────────────────────────────────────
 
     def _handle_act_mode(self, code_blocks):
-        """Execute code blocks in Act mode."""
-        cfg = get_config()
-
+        """Execute code blocks in Act mode (runs in the 3D document)."""
         for code in code_blocks:
-            if cfg.auto_execute:
-                result = execute_code(code)
-            else:
-                try:
-                    import FreeCADGui as Gui
-                    parent = Gui.getMainWindow()
-                except ImportError:
-                    parent = self
-                dlg = CodeReviewDialog(code, parent)
-                dlg.exec()
-                if dlg.fix_requested and dlg.last_error_result:
-                    self._handle_execution_error(dlg.last_error_result)
-                    return
-                result = dlg.get_result()
-                if not result:
-                    continue
+            if hasattr(self, "_set_chat_activity"):
+                self._set_chat_activity(
+                    "tool", translate("ChatDockWidget", "execute code"))
+            result = execute_code(code)
 
             self._append_html(self._render_execution_result(
                 result.success, result.stdout, result.stderr

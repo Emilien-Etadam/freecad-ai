@@ -394,7 +394,7 @@ class AppConfig:
     model_params: dict = field(default_factory=dict)
     # Per-model parameter overrides, keyed by model name:
     # {"gemma4:27b": {"temperature": 1.0, "top_p": 0.95, "top_k": 64}, ...}
-    auto_execute: bool = False
+    auto_execute: bool = True
     max_retries: int = 3
     # Max agentic tool-loop turns per user message. 0 = endless (the Stop
     # button is then the only brake). Default 30 preserves prior behavior.

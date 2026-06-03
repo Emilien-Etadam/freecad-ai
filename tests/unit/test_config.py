@@ -56,7 +56,7 @@ class TestAppConfig:
         assert c.mode == "plan"
         assert c.max_tokens == 4096
         assert c.temperature == 0.3
-        assert c.auto_execute is False
+        assert c.auto_execute is True
         assert c.enable_tools is True
         assert c.thinking == "off"
         assert c.mcp_servers == []
