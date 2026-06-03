@@ -22,9 +22,10 @@ def test_text_file_extensions_exclude_images():
 def test_chat_dock_mixin_modules_exist():
     """Mixin modules exist and define key methods (no Qt import)."""
     root = Path(__file__).resolve().parents[2] / "freecad_ai" / "ui" / "chat_dock"
-    messaging = (root / "messaging.py").read_text(encoding="utf-8")
+    send = (root / "send.py").read_text(encoding="utf-8")
     streaming = (root / "streaming.py").read_text(encoding="utf-8")
-    assert "def _send_message" in messaging
+    assert "def _send_message" in send
     assert "def _on_token" in streaming
+    assert "def _send_message" in (root / "send.py").read_text(encoding="utf-8")
     assert (root / "layout.py").is_file()
     assert (root / "ui.py").is_file()
