@@ -136,39 +136,39 @@ class TestBinaryDetection:
     """Test the _is_binary_content function."""
 
     def test_pdf_detected(self):
-        from freecad_ai.ui.chat_widget import _is_binary_content
+        from freecad_ai.ui.chat_utils import _is_binary_content
         assert _is_binary_content(b"%PDF-1.5\n%something") is True
 
     def test_zip_detected(self):
-        from freecad_ai.ui.chat_widget import _is_binary_content
+        from freecad_ai.ui.chat_utils import _is_binary_content
         assert _is_binary_content(b"PK\x03\x04rest of zip") is True
 
     def test_png_detected(self):
-        from freecad_ai.ui.chat_widget import _is_binary_content
+        from freecad_ai.ui.chat_utils import _is_binary_content
         assert _is_binary_content(b"\x89PNG\r\n\x1a\n") is True
 
     def test_jpeg_detected(self):
-        from freecad_ai.ui.chat_widget import _is_binary_content
+        from freecad_ai.ui.chat_utils import _is_binary_content
         assert _is_binary_content(b"\xff\xd8\xff\xe0") is True
 
     def test_ms_office_legacy_detected(self):
-        from freecad_ai.ui.chat_widget import _is_binary_content
+        from freecad_ai.ui.chat_utils import _is_binary_content
         assert _is_binary_content(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") is True
 
     def test_null_bytes_detected(self):
-        from freecad_ai.ui.chat_widget import _is_binary_content
+        from freecad_ai.ui.chat_utils import _is_binary_content
         assert _is_binary_content(b"some text\x00more text") is True
 
     def test_plain_text_allowed(self):
-        from freecad_ai.ui.chat_widget import _is_binary_content
+        from freecad_ai.ui.chat_utils import _is_binary_content
         assert _is_binary_content(b"Hello, this is plain text.\n") is False
 
     def test_utf8_text_allowed(self):
-        from freecad_ai.ui.chat_widget import _is_binary_content
+        from freecad_ai.ui.chat_utils import _is_binary_content
         assert _is_binary_content("Grüße! 日本語".encode("utf-8")) is False
 
     def test_empty_file_allowed(self):
-        from freecad_ai.ui.chat_widget import _is_binary_content
+        from freecad_ai.ui.chat_utils import _is_binary_content
         assert _is_binary_content(b"") is False
 
 
@@ -176,20 +176,20 @@ class TestTextFileDetection:
     """Test the text file extension detection logic."""
 
     def test_text_extensions(self):
-        from freecad_ai.ui.chat_widget import ChatDockWidget
-        exts = ChatDockWidget._TEXT_EXTENSIONS
+        from freecad_ai.ui.chat_constants import TEXT_FILE_EXTENSIONS
+        exts = TEXT_FILE_EXTENSIONS
         for ext in ("txt", "md", "csv", "json", "xml", "yaml", "py", "js", "html"):
             assert ext in exts, f"{ext} should be a text extension"
 
     def test_image_not_text(self):
-        from freecad_ai.ui.chat_widget import ChatDockWidget
+        from freecad_ai.ui.chat_constants import TEXT_FILE_EXTENSIONS
         for ext in ("png", "jpg", "jpeg", "gif", "webp"):
-            assert ext not in ChatDockWidget._TEXT_EXTENSIONS
+            assert ext not in TEXT_FILE_EXTENSIONS
 
     def test_binary_not_text(self):
-        from freecad_ai.ui.chat_widget import ChatDockWidget
+        from freecad_ai.ui.chat_constants import TEXT_FILE_EXTENSIONS
         for ext in ("pdf", "docx", "xlsx", "zip", "exe"):
-            assert ext not in ChatDockWidget._TEXT_EXTENSIONS
+            assert ext not in TEXT_FILE_EXTENSIONS
 
 
 class TestReadTextFile:
