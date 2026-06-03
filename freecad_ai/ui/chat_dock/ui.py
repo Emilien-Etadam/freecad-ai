@@ -98,6 +98,7 @@ class ChatDockUIMixin:
         self.chat_display.setOpenExternalLinks(False)
         self.chat_display.setOpenLinks(False)
         self.chat_display.setFont(QFont("Sans", 10))
+        self.chat_display.document().setDocumentMargin(12)
         self.chat_display.setStyleSheet(get_chat_display_stylesheet(self.palette()))
         self.chat_display.anchorClicked.connect(self._handle_anchor_click)
         layout.addWidget(self.chat_display, 1)

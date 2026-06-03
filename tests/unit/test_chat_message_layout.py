@@ -1,4 +1,4 @@
-"""Chat bubble HTML: separate blocks so QTextBrowser does not merge labels."""
+"""Chat bubble HTML: table layout for QTextBrowser."""
 import re
 
 from freecad_ai.ui.message_view import (
@@ -8,36 +8,33 @@ from freecad_ai.ui.message_view import (
 )
 
 
-def _div_balance(html: str) -> int:
-    return html.count("<div") - html.count("</div")
-
-
 class TestChatMessageLayout:
-    def test_user_message_closed_and_right_aligned(self):
+    def test_user_message_uses_table_bubble(self):
         html = render_message("user", "Bonjour cube")
         assert "Bonjour cube" in html
-        assert "text-align:right" in html
-        assert _div_balance(html) == 0
-        assert html.rstrip().endswith("</div>")
+        assert "<table" in html
+        assert 'bgcolor="' in html
+        assert 'width="26%"' in html  # left spacer → bubble on the right
+        assert html.endswith("</table>")
 
-    def test_assistant_message_closed_and_left_aligned(self):
+    def test_assistant_message_uses_table_bubble(self):
         html = render_message("assistant", "Voici le modèle.")
-        assert "text-align:left" in html
-        assert _div_balance(html) == 0
+        assert "<table" in html
+        assert 'width="8%"' in html  # left gutter
         assert "Voici" in html
 
-    def test_stream_open_then_close_balanced(self):
+    def test_stream_open_and_close_table(self):
         open_html = render_assistant_stream_open()
-        assert "AI" in open_html or "IA" in open_html  # i18n may vary
-        assert _div_balance(open_html) == 3  # row, bubble, body open
+        assert "<table" in open_html
+        assert "bgcolor=" in open_html
         full = open_html + "réponse" + CHAT_STREAM_END
-        assert _div_balance(full) == 0
+        assert full.endswith("</table>")
+        assert full.count("<table") == full.count("</table>")
 
-    def test_user_and_stream_are_separate_bubbles(self):
+    def test_user_and_ai_labels_in_separate_cells(self):
         user = render_message("user", "prompt")
         stream = render_assistant_stream_open()
-        assert user.count("You") >= 1 or "Vous" in user
+        assert user.strip().endswith("</table>")
         assert re.search(r">AI<|>IA<", stream)
-        # Label must not be inside the user body div (comes after user closes).
-        assert user.strip().endswith("</div></div></div>")
-        assert stream.count("text-align:left") >= 1
+        # User bubble closes before AI table starts.
+        assert user.count("</table>") == 1

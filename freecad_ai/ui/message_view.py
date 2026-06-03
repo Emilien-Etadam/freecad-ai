@@ -274,53 +274,52 @@ def get_chat_display_stylesheet(palette=None) -> str:
 
 
 def _chat_message_html(role, label, label_color, bg_color, body_html, palette=None, *, open_content=False):
-    """Wrap message HTML for QTextBrowser (block bubbles, user right / AI left)."""
+    """Chat bubble via HTML tables (QTextBrowser ignores most CSS flex/float)."""
     colors = _resolve_colors(palette)
     text_color = colors.get("chat_text", "#e0e0e0")
     safe_label = html.escape(label)
+    label_para = (
+        f'<p style="margin:0 0 8px 0; color:{label_color}; font-weight:bold; '
+        f'font-size:9pt;">{safe_label}</p>'
+    )
+    body_open = f'<p style="margin:0; color:{text_color};">'
 
     if role == "user":
-        row_style = "display:block; clear:both; margin:10px 0 8px 0; text-align:right;"
-        bubble_style = (
-            "display:inline-block; max-width:88%; text-align:left; "
-            f"background-color:{bg_color}; border-radius:14px 14px 4px 14px; "
-            "padding:10px 14px;"
+        # Spacer columns push the colored cell to the right (~70% width).
+        table = (
+            '<table width="100%" cellspacing="0" cellpadding="0" '
+            'style="margin-top:12px;margin-bottom:8px;">'
+            "<tr>"
+            '<td width="26%"></td>'
+            f'<td width="66%" bgcolor="{bg_color}" style="padding:12px 14px;">'
         )
+        tail = '</p></td><td width="8%"></td></tr></table>'
     elif role == "assistant":
-        row_style = "display:block; clear:both; margin:10px 0 8px 0; text-align:left;"
-        bubble_style = (
-            "display:inline-block; max-width:88%; text-align:left; "
-            f"background-color:{bg_color}; border-radius:14px 14px 14px 4px; "
-            "padding:10px 14px;"
+        table = (
+            '<table width="100%" cellspacing="0" cellpadding="0" '
+            'style="margin-top:12px;margin-bottom:8px;">'
+            "<tr>"
+            '<td width="8%"></td>'
+            f'<td width="66%" bgcolor="{bg_color}" style="padding:12px 14px;">'
         )
+        tail = '</p></td><td width="26%"></td></tr></table>'
     else:
-        row_style = "display:block; clear:both; margin:8px 0;"
-        bubble_style = (
-            "display:block; max-width:92%; text-align:left; "
-            f"background-color:{bg_color}; border-radius:6px; "
-            f"padding:8px 12px; border-left:3px solid {label_color};"
+        table = (
+            '<table width="100%" cellspacing="0" cellpadding="0" '
+            'style="margin-top:8px;margin-bottom:6px;">'
+            "<tr>"
+            f'<td width="96%" bgcolor="{bg_color}" style="padding:10px 12px; '
+            f'border-left:4px solid {label_color};">'
         )
+        tail = '</p></td><td width="4%"></td></tr></table>'
 
-    label_style = (
-        f"font-size:10px; font-weight:bold; color:{label_color}; "
-        "margin-bottom:6px; text-transform:uppercase; letter-spacing:0.4px;"
-    )
-    body_style = (
-        f"white-space:pre-wrap; word-wrap:break-word; color:{text_color};"
-    )
-
-    head = (
-        f'<div style="{row_style}">'
-        f'<div style="{bubble_style}">'
-        f'<div style="{label_style}">{safe_label}</div>'
-        f'<div style="{body_style}">'
-    )
+    head = table + label_para + body_open
     if open_content:
         return head
-    return head + body_html + "</div></div></div>"
+    return head + body_html + tail
 
 
-CHAT_STREAM_END = "</div></div></div>"
+CHAT_STREAM_END = '</p></td><td width="26%"></td></tr></table>'
 
 
 def render_message(role: str, content, palette=None) -> str:
