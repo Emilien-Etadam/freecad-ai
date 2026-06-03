@@ -79,8 +79,8 @@ class ChatDockCodeMixin:
             error_msg, images=[vp_img] if vp_img else None)
         self._append_html(self._render_message("system", error_msg))
 
-        from ..core.system_prompt import build_system_prompt
-        from ..llm.client import should_strip_thinking
+        from ...core.system_prompt import build_system_prompt
+        from ...llm.client import should_strip_thinking
         mode = "plan" if self.mode_combo.currentIndex() == 0 else "act"
         system_prompt = build_system_prompt(mode=mode)
         cfg = get_config()
@@ -135,7 +135,7 @@ class ChatDockCodeMixin:
 
     def _handle_skill_command(self, text):
         """Handle /command-style skill invocations. Returns True if handled."""
-        from ..extensions.skills import SkillsRegistry
+        from ...extensions.skills import SkillsRegistry
         registry = SkillsRegistry()
         result = registry.match_command(text)
         if not result:

@@ -45,7 +45,7 @@ class ChatDockSendMixin:
                 return
 
         # Fire user_prompt_submit hook
-        from ..hooks import fire_hook
+        from ...hooks import fire_hook
         mode = "plan" if self.mode_combo.currentIndex() == 0 else "act"
         hook_result = fire_hook("user_prompt_submit", {
             "text": text, "images": [], "mode": mode,
@@ -169,7 +169,7 @@ class ChatDockSendMixin:
 
     def _continue_send(self):
         """Continue the send flow after optional compaction."""
-        from ..core.system_prompt import build_system_prompt
+        from ...core.system_prompt import build_system_prompt
         mode = "plan" if self.mode_combo.currentIndex() == 0 else "act"
         cfg = get_config()
 
@@ -186,22 +186,22 @@ class ChatDockSendMixin:
             if not self._mcp_connected:
                 self._connect_mcp_servers(cfg)
 
-            from ..tools.setup import create_default_registry
-            from ..llm.providers import get_api_style
+            from ...tools.setup import create_default_registry
+            from ...llm.providers import get_api_style
 
             # Build extra tools for active optimization
             extra_tools = []
             if self._optimization_active:
                 try:
-                    from ..tools.optimize_tools import get_optimize_iteration_tool, _active_config
+                    from ...tools.optimize_tools import get_optimize_iteration_tool, _active_config
                     extra_tools = [get_optimize_iteration_tool()]
                     # Pass the tool executor to the active config so evaluator can dispatch
                     if _active_config is not None:
-                        from ..tools.executor_utils import (
+                        from ...tools.executor_utils import (
                             MainThreadToolExecutor, _HAS_QT,
                         )
                         if _HAS_QT:
-                            from ..tools.executor_utils import QtMainThreadToolExecutor
+                            from ...tools.executor_utils import QtMainThreadToolExecutor
                             executor = QtMainThreadToolExecutor()
                         else:
                             executor = MainThreadToolExecutor()
@@ -215,7 +215,7 @@ class ChatDockSendMixin:
             # Update executor registry if optimization active
             if self._optimization_active and extra_tools:
                 try:
-                    from ..tools.optimize_tools import _active_config
+                    from ...tools.optimize_tools import _active_config
                     if _active_config and "_tool_executor" in _active_config:
                         _active_config["_tool_executor"].set_registry(self._tool_registry)
                 except ImportError:
@@ -223,7 +223,7 @@ class ChatDockSendMixin:
 
             # Search for vision fallback after registry (with MCP tools) is created
             if not cfg.supports_vision and self._vision_fallback_tool is None:
-                from ..mcp.manager import find_vision_fallback
+                from ...mcp.manager import find_vision_fallback
                 self._vision_fallback_tool = find_vision_fallback(self._tool_registry)
                 self._refresh_image_controls()
             api_style = get_api_style(cfg.provider.name)
@@ -279,7 +279,7 @@ class ChatDockSendMixin:
                 conversation_ref = self.conversation
 
         # Get messages for API
-        from ..llm.client import should_strip_thinking
+        from ...llm.client import should_strip_thinking
         strip = should_strip_thinking(
             cfg.provider.model, cfg.strip_thinking_history)
         messages = self.conversation.get_messages_for_api(

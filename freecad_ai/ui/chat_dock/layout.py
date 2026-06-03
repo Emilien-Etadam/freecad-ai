@@ -117,7 +117,7 @@ class ChatDockLayoutMixin:
         # Disconnect MCP servers
         if self._mcp_connected:
             try:
-                from ..mcp.manager import get_mcp_manager
+                from ...mcp.manager import get_mcp_manager
                 get_mcp_manager().disconnect_all()
             except Exception:
                 pass

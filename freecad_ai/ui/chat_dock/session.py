@@ -36,7 +36,7 @@ class ChatDockSessionMixin:
             self._vision_fallback_tool = None
             self._mcp_connected = False
             # Disconnect old MCP servers so stale connections don't linger
-            from ..mcp.manager import get_mcp_manager
+            from ...mcp.manager import get_mcp_manager
             get_mcp_manager().disconnect_all()
         self._ensure_vision_fallback()
         self._refresh_image_controls()
@@ -46,7 +46,7 @@ class ChatDockSessionMixin:
         # Clean up optimization state
         if self._optimization_active:
             try:
-                from ..tools.optimize_tools import stop_optimization
+                from ...tools.optimize_tools import stop_optimization
                 stop_optimization()
             except ImportError:
                 pass

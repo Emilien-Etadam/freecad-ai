@@ -187,7 +187,7 @@ class ChatDockUIMixin:
     # ── Dangerous-mode toggle ──────────────────────────────
 
     def _on_danger_toggled(self, checked):
-        from ..core.dangerous_mode import get_dangerous_mode
+        from ...core.dangerous_mode import get_dangerous_mode
         dm = get_dangerous_mode()
         if checked:
             box = QtWidgets.QMessageBox(self)
@@ -220,7 +220,7 @@ class ChatDockUIMixin:
         self._update_danger_banner()
 
     def _update_danger_banner(self):
-        from ..core.dangerous_mode import get_dangerous_mode
+        from ...core.dangerous_mode import get_dangerous_mode
         active = get_dangerous_mode().active
         self.danger_banner.setVisible(active)
         if active and not self.danger_toggle.isChecked():

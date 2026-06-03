@@ -168,7 +168,7 @@ class ChatDockDisplayMixin:
             self._mcp_connected = True
             return
         try:
-            from ..mcp.manager import get_mcp_manager
+            from ...mcp.manager import get_mcp_manager
             manager = get_mcp_manager()
             prev_servers = set(manager.connected_servers)
             manager.connect_all(cfg.mcp_servers, only_deferred=only_deferred)

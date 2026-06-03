@@ -151,7 +151,7 @@ class ChatDockFilesMixin:
 
     def _process_file_with_hook(self, path: str, filename: str, ext: str):
         """Try to convert a file via the file_attach hook."""
-        from ..hooks import fire_hook
+        from ...hooks import fire_hook
         import mimetypes
         mime_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
         result = fire_hook("file_attach", {
@@ -175,7 +175,7 @@ class ChatDockFilesMixin:
 
     def _capture_viewport_for_chat(self) -> dict | None:
         """Capture the viewport and return an image content block dict."""
-        from ..utils.viewport import capture_viewport_image, make_image_content_block, RESOLUTION_PRESETS
+        from ...utils.viewport import capture_viewport_image, make_image_content_block, RESOLUTION_PRESETS
         cfg = get_config()
         w, h = RESOLUTION_PRESETS.get(cfg.viewport_resolution, (800, 600))
         img_bytes = capture_viewport_image(w, h)
@@ -230,11 +230,11 @@ class ChatDockFilesMixin:
         if has_non_deferred:
             self._connect_mcp_servers(cfg, only_deferred=False)
         # Build registry (with whatever is connected so far) and search
-        from ..mcp.manager import get_mcp_manager
+        from ...mcp.manager import get_mcp_manager
         manager = get_mcp_manager()
         if manager.connected_servers:
-            from ..tools.setup import create_default_registry
-            from ..mcp.manager import find_vision_fallback
+            from ...tools.setup import create_default_registry
+            from ...mcp.manager import find_vision_fallback
             self._tool_registry = create_default_registry()
             self._vision_fallback_tool = find_vision_fallback(self._tool_registry)
 

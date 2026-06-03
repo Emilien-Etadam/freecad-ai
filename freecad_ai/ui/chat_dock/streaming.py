@@ -123,7 +123,7 @@ class ChatDockStreamingMixin:
         self.conversation.save()
 
         # Post-response hook
-        from ..hooks import fire_hook
+        from ...hooks import fire_hook
         fire_hook("post_response", {
             "response_text": full_response,
             "tool_calls_count": len(self._worker._tool_results) if self._worker and self._worker._tool_results else 0,
@@ -173,7 +173,7 @@ class ChatDockStreamingMixin:
             return
 
         try:
-            from ..extensions.skills import SkillsRegistry
+            from ...extensions.skills import SkillsRegistry
             registry = SkillsRegistry()
             skill = registry.get_skill(skill_name)
         except Exception:
@@ -195,7 +195,7 @@ class ChatDockStreamingMixin:
             return
 
         # Get params from report_skill_params tool
-        from ..tools.freecad_tools import (
+        from ...tools.freecad_tools import (
             get_reported_skill_params, clear_reported_skill_params,
         )
         params = get_reported_skill_params() or {}
@@ -220,7 +220,7 @@ class ChatDockStreamingMixin:
                 "No active document \u2014 cannot validate."))
             return
 
-        from ..extensions.skill_validator import validate_skill, compute_pass_rate
+        from ...extensions.skill_validator import validate_skill, compute_pass_rate
         results = validate_skill(doc, params, validation_content)
 
         if not results:
