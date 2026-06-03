@@ -255,6 +255,28 @@ def _inspect_face(obj, face_name):
         return (True, False)
 
 
+def _inspect_edge(obj, edge_name):
+    """Return (exists, straight) for ``edge_name`` on ``obj``'s shape.
+
+    Never raises — a missing edge, unavailable Part module, or non-shape object
+    yields (False, False). "straight" means the edge's curve is a ``Part.Line``.
+    """
+    try:
+        import Part
+    except Exception:
+        return (False, False)
+    try:
+        edge = obj.Shape.getElement(edge_name)
+    except Exception:
+        return (False, False)
+    if edge is None or edge.ShapeType != "Edge":
+        return (False, False)
+    try:
+        return (True, isinstance(edge.Curve, Part.Line))
+    except Exception:
+        return (True, False)
+
+
 def _read_planar_selection():
     """Return (object_name, sub_element) for the first usable planar-face or
     plane selection in the GUI, or None.

@@ -550,6 +550,295 @@ CREATE_DATUM_PLANE = ToolDefinition(
 )
 
 
+# ── create_datum_line ───────────────────────────────────────
+
+_DATUM_LINE_MODE_ERR = (
+    "Specify exactly one of: two points (point1+point2), an edge "
+    "(support+edge), or an origin axis (axis).")
+
+def _resolve_datum_line_def(point1, point2, support, edge, axis,
+                            body_present, support_kind, edge_exists,
+                            edge_straight, in_body):
+    """Decide how a datum line is defined. Pure — no FreeCAD calls.
+
+    Exactly one mode's inputs must be supplied. ``support_kind`` is ``""`` |
+    ``"missing"`` | ``"plane"`` | ``"solid"`` | ``"other"`` (only ``"missing"``
+    changes the outcome — any found object can host an edge). ``edge_exists`` /
+    ``edge_straight`` matter only when ``edge`` != "". ``in_body`` is the
+    support's owning Body name or ``None``.
+
+    Returns one of:
+      {"mode": "points", "p1": [x,y,z], "p2": [x,y,z]}
+      {"mode": "edge", "support": str, "sub": str, "in_body": str|None}
+      {"mode": "origin", "axis": "X"|"Y"|"Z"}
+      {"mode": "error", "message": str}
+    """
+    point1 = list(point1) if point1 else []
+    point2 = list(point2) if point2 else []
+    support = support or ""
+    edge = edge or ""
+    axis = (axis or "").upper()
+
+    has_points = bool(point1) or bool(point2)
+    has_edge = bool(support) or bool(edge)
+    has_axis = bool(axis)
+
+    if sum([has_points, has_edge, has_axis]) != 1:
+        return {"mode": "error", "message": _DATUM_LINE_MODE_ERR}
+
+    if has_points:
+        if len(point1) != 3 or len(point2) != 3:
+            return {"mode": "error",
+                    "message": "Two-points mode needs point1 and point2 as "
+                               "[x, y, z]."}
+        d2 = sum((a - b) ** 2 for a, b in zip(point1, point2))
+        if d2 < 1e-14:
+            return {"mode": "error",
+                    "message": "point1 and point2 are coincident; a line needs "
+                               "two distinct points."}
+        return {"mode": "points", "p1": point1, "p2": point2}
+
+    if has_edge:
+        if not support:
+            return {"mode": "error", "message": "`edge` requires `support`."}
+        if not edge:
+            return {"mode": "error",
+                    "message": "`support` requires an `edge` (e.g. 'Edge3')."}
+        if support_kind == "missing":
+            return {"mode": "error", "message": f"Object '{support}' not found."}
+        if not edge_exists:
+            return {"mode": "error",
+                    "message": f"Edge '{edge}' not found on '{support}'."}
+        if not edge_straight:
+            return {"mode": "error",
+                    "message": (f"Edge '{edge}' on '{support}' is not straight; "
+                                "a datum line needs a straight edge.")}
+        return {"mode": "edge", "support": support, "sub": edge,
+                "in_body": in_body}
+
+    # has_axis
+    if axis not in ("X", "Y", "Z"):
+        return {"mode": "error", "message": "axis must be X, Y, or Z."}
+    if not body_present:
+        return {"mode": "error",
+                "message": "axis mode needs body_name (origin axes belong to a "
+                           "Body)."}
+    return {"mode": "origin", "axis": axis}
+
+
+_PLANE_TYPE_IDS = ("App::Plane", "PartDesign::Plane", "Part::DatumPlane")
+
+
+def _classify_support(obj):
+    """Classify a support object for sketch attachment.
+
+    Returns 'plane' for origin/datum planes, 'solid' for shapes with solids,
+    'other' for everything else (sketches, wires, empty features).
+    """
+    if getattr(obj, "TypeId", "") in _PLANE_TYPE_IDS:
+        return "plane"
+    shape = getattr(obj, "Shape", None)
+    try:
+        if shape is not None and shape.Solids:
+            return "solid"
+    except Exception:
+        pass
+    return "other"
+
+
+def _owning_body_name(obj, objects):
+    """Return the Name of the PartDesign::Body that contains ``obj``, or None.
+
+    ``objects`` is an iterable of document objects (e.g. ``doc.Objects``). A Body lists
+    its children in ``.Group``.
+
+    See also ``_find_body_for``, which returns the Body object itself.
+    """
+    for cand in objects:
+        if getattr(cand, "TypeId", "") != "PartDesign::Body":
+            continue
+        try:
+            if any(getattr(c, "Name", None) == obj.Name for c in cand.Group):
+                return cand.Name
+        except Exception:
+            pass
+    return None
+
+
+def _inspect_face(obj, face_name):
+    """Return (exists, planar) for ``face_name`` on ``obj``'s shape.
+
+    Never raises — a missing face, unavailable Part module, or non-shape object
+    yields (False, False).
+    """
+    try:
+        import Part
+    except Exception:
+        return (False, False)
+    try:
+        face = obj.Shape.getElement(face_name)
+    except Exception:
+        return (False, False)
+    if face is None or face.ShapeType != "Face":
+        return (False, False)
+    try:
+        return (True, isinstance(face.Surface, Part.Plane))
+    except Exception:
+        return (True, False)
+
+
+def _handle_create_datum_line(
+    point1: list | None = None,
+    point2: list | None = None,
+    support: str = "",
+    edge: str = "",
+    axis: str = "",
+    body_name: str = "",
+    label: str = "",
+) -> ToolResult:
+    """Create a datum line (axis) by two points, a straight edge, or an origin
+    axis. No offset — use transform_object to place a parallel/duplicate line."""
+    import FreeCAD as App
+
+    def do(doc):
+        warnings = []
+
+        body = None
+        if body_name:
+            body = _get_object(doc, body_name)
+            if not body:
+                hint = _suggest_similar(doc, body_name, "Body")
+                return ToolResult(success=False, output="",
+                                  error=f"Body '{body_name}' not found.{hint}")
+
+        # Inspect the support/edge so the pure resolver gets plain facts.
+        sup = support
+        sup_kind = ""
+        edge_exists = edge_straight = False
+        in_body = None
+        sup_obj = None
+        if support:
+            sup_obj = _get_object(doc, support)
+            if sup_obj is None:
+                sup_kind = "missing"
+            else:
+                sup = sup_obj.Name
+                sup_kind = _classify_support(sup_obj)
+                in_body = _owning_body_name(sup_obj, doc.Objects)
+                if edge:
+                    edge_exists, edge_straight = _inspect_edge(sup_obj, edge)
+
+        spec = _resolve_datum_line_def(
+            point1, point2, sup, edge, axis, body is not None,
+            sup_kind, edge_exists, edge_straight, in_body)
+        if spec["mode"] == "error":
+            hint = _suggest_similar(doc, support) if sup_kind == "missing" else ""
+            return ToolResult(success=False, output="", error=spec["message"] + hint)
+
+        # Choose the container the datum line is created in.
+        if spec["mode"] == "edge":
+            if body_name:
+                warnings.append("body_name ignored — datum line placed relative "
+                                "to support.")
+            if spec.get("in_body"):
+                container = _get_object(doc, spec["in_body"])
+            elif sup_obj is not None and getattr(sup_obj, "TypeId", "") == "PartDesign::Body":
+                container = sup_obj
+            else:
+                container = None
+        else:  # origin or points — honor body_name (origin requires it)
+            container = body
+
+        # PartDesign::Line works in-Body (newObject) and standalone (addObject).
+        if container is not None:
+            line = container.newObject("PartDesign::Line", label or "DatumLine")
+        else:
+            line = doc.addObject("PartDesign::Line", label or "DatumLine")
+
+        if spec["mode"] == "edge":
+            line.AttachmentSupport = [(sup_obj, spec["sub"])]
+            line.MapMode = "Tangent"
+        elif spec["mode"] == "origin":
+            axis_feat = _get_body_axis(container, spec["axis"])
+            if axis_feat:
+                line.AttachmentSupport = [(axis_feat, "")]
+                line.MapMode = "Tangent"
+            else:
+                warnings.append(
+                    f"could not resolve the {spec['axis']} origin axis — datum "
+                    "line left at the document origin.")
+        else:  # points — place through p1 directed toward p2
+            p1 = App.Vector(*spec["p1"])
+            p2 = App.Vector(*spec["p2"])
+            direction = p2.sub(p1)
+            # PartDesign::Line lies along its local Z; orient local Z onto the
+            # p1→p2 direction (no attachment in two-points mode).
+            line.Placement = App.Placement(
+                p1, App.Rotation(App.Vector(0, 0, 1), direction))
+            if hasattr(line, "Length"):
+                line.Length = direction.Length
+
+        doc.recompute()
+
+        # Attachment modes: FreeCAD marks State Invalid/Error if it can't resolve.
+        if spec["mode"] in ("edge", "origin"):
+            state = list(getattr(line, "State", []) or [])
+            if any(s in ("Invalid", "Error") for s in state):
+                ref = spec.get("support") or ("origin axis " + spec.get("axis", ""))
+                return ToolResult(
+                    success=False, output="",
+                    error=(f"Failed to attach datum line to '{ref}'"
+                           + (f":{spec['sub']}" if spec.get("sub") else "")
+                           + " — attachment did not resolve."))
+
+        return ToolResult(
+            success=True,
+            output=(("⚠ " + " ".join(warnings) + "\n" if warnings else "")
+                    + f"Created datum line '{line.Name}' ({line.TypeId})."
+                    + " Use it as a revolve_sketch axis or a mirror reference."),
+            data={"name": line.Name, "label": line.Label, "type_id": line.TypeId},
+        )
+
+    return _with_undo("Create Datum Line", do)
+
+
+CREATE_DATUM_LINE = ToolDefinition(
+    name="create_datum_line",
+    description=(
+        "Create a datum line (axis) — useful as a rotation/revolve axis or a "
+        "mirror reference. Three mutually exclusive modes: two points "
+        "(point1=[x,y,z], point2=[x,y,z]) for an axis where no geometry exists; "
+        "a straight edge of an object (support='Obj', edge='Edge3' — names from "
+        "list_edges); or an origin axis (axis=X/Y/Z, needs body_name). The result "
+        "is a PartDesign::Line (inside a Body, or standalone when the edge is not "
+        "in a Body). No offset — use transform_object to place a parallel or "
+        "duplicate line."
+    ),
+    category="modeling",
+    parameters=[
+        ToolParam("point1", "array", "First 3-D point [x, y, z] (two-points "
+                  "mode).", required=False, default=None,
+                  items={"type": "number"}),
+        ToolParam("point2", "array", "Second 3-D point [x, y, z] (two-points "
+                  "mode).", required=False, default=None,
+                  items={"type": "number"}),
+        ToolParam("support", "string", "Object whose edge to attach to (edge "
+                  "mode).", required=False, default=""),
+        ToolParam("edge", "string", "Straight sub-element of `support`, e.g. "
+                  "'Edge3' (from list_edges). Requires `support`.",
+                  required=False, default=""),
+        ToolParam("axis", "string", "Origin axis to reference: X, Y, or Z "
+                  "(needs body_name).", required=False, default="",
+                  enum=["X", "Y", "Z"]),
+        ToolParam("body_name", "string", "Body to create the line in (required "
+                  "for axis mode; optional for two-points; ignored for edge "
+                  "mode).", required=False, default=""),
+        ToolParam("label", "string", "Display label for the datum line.",
+                  required=False, default=""),
+    ],
+    handler=_handle_create_datum_line,
+)
+
 # ── edit_sketch ────────────────────────────────────────────
 
 def _handle_edit_sketch(
