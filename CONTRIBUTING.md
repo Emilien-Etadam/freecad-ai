@@ -128,6 +128,18 @@ Unit tests should pass without FreeCAD installed. Integration tests require a Fr
 
 **Add tests** for new features when possible. Test files go in `tests/unit/` and should start with `test_`.
 
+## Chat UI layout
+
+The main dock lives in `freecad_ai/ui/chat_widget.py` (facade + `ChatDockWidget`). Supporting modules:
+
+- `chat_constants.py` — shared constants (binary magic bytes, text extensions)
+- `chat_utils.py` — rerank helpers, `_is_binary_content`
+- `chat_workers.py` — `_LLMWorker`, `_CompactionWorker`
+- `chat_attachments.py` — `_ImageAwareTextEdit`, `_AttachmentStrip`
+- `chat_dock_state.py` — dock position persistence
+
+`InitGui.py` and tests should keep importing `get_chat_dock` / `ChatDockWidget` from `chat_widget`.
+
 ## Code Style
 
 - Python 3.11+, type hints encouraged
