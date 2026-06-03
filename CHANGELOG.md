@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.0-alpha] - 2026-06-03
+
+A feature release adding a datum-geometry and transform/duplicate toolset — sketching on faces and named planes, parametric datum planes and lines, relative transforms, and independent parametric copies — together with a sandbox fix that unblocks editing imported (mesh→solid) parts. This work grew out of [issue #18](https://github.com/ghbalf/freecad-ai/issues/18) (reported by 0xrushi): a snap-fit workflow on an imported solid that fell out of the parametric toolchain.
+
+### Added
+
+- **Sketch on a planar face or a named plane** (`freecad_ai/tools/freecad_tools.py:_handle_create_sketch`). `create_sketch` gained `support`/`face` parameters and a GUI-selection fallback: it can now attach to a planar face of an existing object — including a standalone imported mesh→solid, where it creates a standalone sketch — or to a datum/origin plane by name, not just the XY/XZ/YZ origin planes. Planar-face validation; offset along the face normal. ([#20](https://github.com/ghbalf/freecad-ai/pull/20))
+- **`create_datum_plane` tool** — a parametric datum plane offset (parallel) from an origin plane, a planar face, an existing plane, or the current selection. Creates a `PartDesign::Plane` (inside a Body, or standalone), referenceable as `create_sketch(support=...)`. ([#21](https://github.com/ghbalf/freecad-ai/pull/21))
+- **`create_datum_line` tool** — a datum line (axis) defined by two points, a straight edge of an object, or an origin axis (X/Y/Z). Usable as a `revolve_sketch` rotation axis or a mirror reference. ([#22](https://github.com/ghbalf/freecad-ai/pull/22))
+- **`duplicate_object` tool** — an independent, history-preserving copy of an object's whole feature tree (e.g. a Body with its sketches and pads), leaving the original unchanged, with an optional relative translate/rotate to offset the copy in one call. ([#23](https://github.com/ghbalf/freecad-ai/pull/23))
+
+### Changed
+
+- **`transform_object` is now relative by default** (`freecad_ai/tools/freecad_tools.py:_handle_transform_object`). Translation adds to the object's current position and rotation spins it in place about its own origin; `0` means no change. Previously the tool overwrote the placement absolutely, which silently reset an object to the world origin when asked only to rotate it. Pass `relative=False` to restore the absolute-overwrite behavior. ([#23](https://github.com/ghbalf/freecad-ai/pull/23))
+
+### Fixed
+
+- **Sandbox validator blamed candidate code for pre-existing invalid shapes** (`freecad_ai/core/executor.py`). The headless dry-run walked every object in the document and reported any with an invalid/null shape, with no baseline — so a document already containing an OCC-invalid object (very common with imported mesh→solid conversions) made every subsequent edit fail the post-execution check, naming objects the code never touched. The validator now snapshots each object's problem state before running the candidate code and reports only objects that are **new** or **newly broken**. ([#18](https://github.com/ghbalf/freecad-ai/issues/18)/[#19](https://github.com/ghbalf/freecad-ai/pull/19), reported by 0xrushi)
+
+### Tests
+
+- Unit: `tests/unit/test_sketch_attachment.py`, `test_datum_plane.py`, `test_datum_line.py`, `test_transform_duplicate.py`, and `test_executor.py::TestCollectObjectIssues`.
+- Integration (real FreeCAD): `tests/integration/test_sketch_attachment_integration.py`, `test_datum_plane_integration.py`, `test_datum_line_integration.py`, `test_transform_duplicate_integration.py`, and `test_sandbox_validation.py::TestSandboxIgnoresPreexistingInvalidity` — covering face/plane/line attachment, the relative-transform footgun fix, full-tree duplication, and the end-to-end "datum line + duplicate → parallel line" workflow.
+
 ## [0.15.2-alpha] - 2026-05-30
 
 A bug-fix patch for [issue #17](https://github.com/ghbalf/freecad-ai/issues/17): cutting or fusing into an existing model could collapse its parametric feature tree, leaving the original sketches and features buried and uneditable.
