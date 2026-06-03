@@ -4,6 +4,8 @@ import json
 
 from ..compat import QtWidgets, QtCore, QtGui
 from ...config import get_config
+from ...core.conversation import Conversation
+from ...core.executor import extract_code_blocks
 from ...i18n import translate
 from ..message_view import (
     render_plan_buttons,
@@ -15,6 +17,7 @@ from ..message_view import (
 )
 
 Qt = QtCore.Qt
+QApplication = QtWidgets.QApplication
 QTextCursor = QtGui.QTextCursor
 
 

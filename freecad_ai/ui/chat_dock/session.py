@@ -3,6 +3,7 @@ import json
 
 from ..compat import QtWidgets, QtCore, QtGui
 from ...config import LOGS_DIR, get_config, prune_oldest_files, save_current_config
+from ...core.conversation import Conversation
 from ...i18n import translate
 from ..message_view import render_message
 from ..chat_utils import _run_reranker, _extract_latest_user_text, _is_binary_content
@@ -16,7 +17,7 @@ class ChatDockSessionMixin:
 
     def _open_settings(self):
         """Open the settings dialog."""
-        from .settings_dialog import SettingsDialog
+        from ..settings_dialog import SettingsDialog
         cfg = get_config()
         old_provider = cfg.provider.name
         old_model = cfg.provider.model

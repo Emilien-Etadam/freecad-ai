@@ -11,6 +11,7 @@ from ..message_view import (
     render_thinking_stream_open,
     render_thinking_stream_chunk,
 )
+from ...core.executor import extract_code_blocks
 from ..chat_workers import _LLMWorker
 
 Qt = QtCore.Qt
