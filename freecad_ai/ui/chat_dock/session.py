@@ -64,7 +64,7 @@ class ChatDockSessionMixin:
         """Show a dialog to load a previous chat session."""
         saved = Conversation.list_saved()
         if not saved:
-            self._append_html(render_message("system", translate("ChatDockWidget", "No saved sessions found.")))
+            self._append_html(self._render_message("system", translate("ChatDockWidget", "No saved sessions found.")))
             return
 
         # Build display items with timestamps and preview
@@ -117,13 +117,13 @@ class ChatDockSessionMixin:
                 self._refresh_input_history()
                 self._rerender_chat()
                 self._update_token_count()
-                self._append_html(render_message(
+                self._append_html(self._render_message(
                     "system",
                     translate("ChatDockWidget", "Resumed session from {}").format(
                         items[idx][0].split(' | ')[0])
                 ))
             except Exception as e:
-                self._append_html(render_message(
+                self._append_html(self._render_message(
                     "system",
                     translate("ChatDockWidget", "Failed to load session: {}").format(e)
                 ))
@@ -169,12 +169,12 @@ class ChatDockSessionMixin:
                 cfg.max_retention_age_days,
             )
 
-            self._append_html(render_message(
+            self._append_html(self._render_message(
                 "system",
                 translate("ChatDockWidget", "Session log saved to: {}").format(filepath)
             ))
         except Exception as e:
-            self._append_html(render_message(
+            self._append_html(self._render_message(
                 "system",
                 translate("ChatDockWidget", "Failed to save log: {}").format(e)
             ))

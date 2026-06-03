@@ -7,6 +7,8 @@ from ..message_view import (
     render_message,
     render_tool_call,
     render_execution_result,
+    render_thinking_stream_open,
+    render_thinking_stream_chunk,
 )
 from ..chat_workers import _LLMWorker
 
@@ -29,13 +31,7 @@ class ChatDockStreamingMixin:
             # Start a thinking block
             cursor = self.chat_display.textCursor()
             cursor.movePosition(QTextCursor.End)
-            cursor.insertHtml(
-                '<div style="margin: 4px 0; padding: 4px 8px; '
-                'background-color: #f0f0f0; border-left: 2px solid #ccc; '
-                'font-size: 11px; color: #888; font-style: italic;">'
-                '<span style="color: #aaa;">{}</span><br>'.format(
-                    translate("ChatDockWidget", "Thinking..."))
-            )
+            cursor.insertHtml(render_thinking_stream_open(palette=self.palette()))
             self.chat_display.setTextCursor(cursor)
 
         escaped = html_mod.escape(chunk)
@@ -43,7 +39,7 @@ class ChatDockStreamingMixin:
 
         cursor = self.chat_display.textCursor()
         cursor.movePosition(QTextCursor.End)
-        cursor.insertHtml(f'<span style="color: #999; font-size: 11px;">{escaped}</span>')
+        cursor.insertHtml(render_thinking_stream_chunk(chunk, palette=self.palette()))
         self.chat_display.setTextCursor(cursor)
         self.chat_display.ensureCursorVisible()
 
@@ -145,7 +141,7 @@ class ChatDockStreamingMixin:
         if self._worker and self._worker._tool_timeline and not getattr(self, '_summary_rendered', False):
             self._summary_rendered = True
             from .message_view import render_tool_summary
-            self._append_html(render_tool_summary(self._worker._tool_timeline))
+            self._append_html(self._render_tool_summary(self._worker._tool_timeline))
 
         # Handle code execution based on mode (only if tools were NOT used)
         mode = "plan" if self.mode_combo.currentIndex() == 0 else "act"
@@ -172,7 +168,7 @@ class ChatDockStreamingMixin:
 
         skill_name = getattr(self, "_active_skill_name", "")
         if not skill_name:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 "No skill detected \u2014 cannot validate without VALIDATION.md."))
             return
 
@@ -181,12 +177,12 @@ class ChatDockStreamingMixin:
             registry = SkillsRegistry()
             skill = registry.get_skill(skill_name)
         except Exception:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 f"Could not load skill '{skill_name}'."))
             return
 
         if not skill or not skill.validation_path:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 f"Skill '{skill_name}' has no VALIDATION.md \u2014 skipping validation."))
             return
 
@@ -194,7 +190,7 @@ class ChatDockStreamingMixin:
             with open(skill.validation_path) as f:
                 validation_content = f.read()
         except OSError as e:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 f"Could not read VALIDATION.md: {e}"))
             return
 
@@ -206,7 +202,7 @@ class ChatDockStreamingMixin:
         clear_reported_skill_params()
 
         if not params:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 "No parameters reported \u2014 LLM did not call report_skill_params. "
                 "Cannot validate."))
             return
@@ -215,12 +211,12 @@ class ChatDockStreamingMixin:
             import FreeCAD as App
             doc = App.ActiveDocument
         except ImportError:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 "FreeCAD not available \u2014 cannot validate."))
             return
 
         if not doc:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 "No active document \u2014 cannot validate."))
             return
 
@@ -228,7 +224,7 @@ class ChatDockStreamingMixin:
         results = validate_skill(doc, params, validation_content)
 
         if not results:
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 "No validation checks found."))
             return
 
@@ -239,7 +235,7 @@ class ChatDockStreamingMixin:
             icon = "\u2713" if r.passed else "\u2717"
             lines.append(f"  {icon}  {r.message}")
 
-        self._append_html(render_message("system", "\n".join(lines)))
+        self._append_html(self._render_message("system", "\n".join(lines)))
 
     @Slot(str)
     def _on_error(self, error_msg):
@@ -272,7 +268,7 @@ class ChatDockStreamingMixin:
                 for tc, r in zip(turn["tool_calls"], turn["results"]):
                     summary_parts.append(f"- **{tc['name']}**: {r['content']}")
             summary = "\n".join(summary_parts)
-            self._append_html(render_message(
+            self._append_html(self._render_message(
                 "assistant",
                 translate("ChatDockWidget",
                           "All operations completed successfully:") + "\n\n" + summary
@@ -285,19 +281,19 @@ class ChatDockStreamingMixin:
             self.conversation.save()
         else:
             # No tool results — show the raw error
-            self._append_html(render_message("system", translate("ChatDockWidget", "Error: ") + error_msg))
+            self._append_html(self._render_message("system", translate("ChatDockWidget", "Error: ") + error_msg))
 
     # ── Tool call handlers ──────────────────────────────────
 
     @Slot(str, str)
     def _on_tool_call_started(self, tool_name, call_id):
         """Render tool call start in the chat."""
-        self._append_html(render_tool_call(tool_name, call_id, started=True))
+        self._append_html(self._render_tool_call(tool_name, call_id, started=True))
 
     @Slot(str, str, bool, str)
     def _on_tool_call_finished(self, tool_name, call_id, success, output):
         """Render tool call result in the chat."""
-        self._append_html(render_tool_call(
+        self._append_html(self._render_tool_call(
             tool_name, call_id, started=False, success=success, output=output
         ))
 

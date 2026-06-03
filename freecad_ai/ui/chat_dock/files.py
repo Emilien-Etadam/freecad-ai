@@ -55,7 +55,7 @@ class ChatDockFilesMixin:
                     if self.input_edit._images_enabled:
                         self.input_edit._process_image_file(path)
                     else:
-                        self._append_html(render_message("system",
+                        self._append_html(self._render_message("system",
                             "Cannot attach images — no vision support detected. Check Settings or use a vision-capable model."))
                     event.acceptProposedAction()
                     return
@@ -111,7 +111,7 @@ class ChatDockFilesMixin:
         # Route 1: Image files → vision block (requires vision support)
         if ext in ("png", "jpg", "jpeg", "bmp", "gif", "webp"):
             if not self.input_edit._images_enabled:
-                self._append_html(render_message("system",
+                self._append_html(self._render_message("system",
                     "Cannot attach images — no vision support detected. "
                     "Check Settings or use a vision-capable model."))
                 return
@@ -137,7 +137,7 @@ class ChatDockFilesMixin:
         try:
             size = os.path.getsize(path)
             if size > max_size:
-                self._append_html(render_message("system",
+                self._append_html(self._render_message("system",
                     f"File too large ({size // 1024} KB). Maximum is {max_size // 1024} KB."))
                 return None
             with open(path, "rb") as f:
@@ -146,7 +146,7 @@ class ChatDockFilesMixin:
                 return None  # Binary file — let the hook handle it
             return raw.decode("utf-8", errors="replace")
         except OSError as e:
-            self._append_html(render_message("system", f"Cannot read file: {e}"))
+            self._append_html(self._render_message("system", f"Cannot read file: {e}"))
             return None
 
     def _process_file_with_hook(self, path: str, filename: str, ext: str):
@@ -161,14 +161,14 @@ class ChatDockFilesMixin:
             "mime_type": mime_type,
         })
         if result.get("block"):
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 f"Attachment blocked: {result.get('reason', 'no reason given')}"))
             return
         if result.get("text"):
             self._attachment_strip.add_document(filename, result["text"])
             return
         # No hook handled it
-        self._append_html(render_message("system",
+        self._append_html(self._render_message("system",
             f"No converter for .{ext} files. To handle this format, either:\n"
             f"- Add a file_attach hook (see docs/hooks/file-attach-example/)\n"
             f"- Install an MCP server like markdownify-mcp for rich conversion"))

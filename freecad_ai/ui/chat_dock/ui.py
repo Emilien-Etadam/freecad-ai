@@ -3,12 +3,19 @@ from ..compat import QtWidgets, QtCore, QtGui
 from ...config import get_config
 from ...i18n import translate
 from ..message_view import (
+    colors_from_palette,
     _get_theme_colors,
     get_chat_display_stylesheet,
     get_freecad_mode_name,
     refresh_theme_cache,
 )
 from ..chat_constants import _STYLESHEET_CONFLICT_THEMES, _CAPTURE_MODE_COLORS
+from ..theme_palette import (
+    qtextedit_palette_stylesheet,
+    pushbutton_accent_stylesheet,
+    pushbutton_loading_stylesheet,
+    danger_banner_stylesheet,
+)
 
 Qt = QtCore.Qt
 QWidget = QtWidgets.QWidget
@@ -77,9 +84,7 @@ class ChatDockUIMixin:
         self.danger_banner = QtWidgets.QLabel(
             translate("ChatDockWidget",
                       "⚠ DANGEROUS MODE ACTIVE — safety checks disabled"))
-        self.danger_banner.setStyleSheet(
-            "background-color: #b00020; color: white; font-weight: bold; "
-            "padding: 4px;")
+        self.danger_banner.setStyleSheet("")  # themed in _apply_theme
         self.danger_banner.setAlignment(QtCore.Qt.AlignCenter)
         self.danger_banner.setVisible(False)
         layout.addWidget(self.danger_banner)
@@ -92,7 +97,7 @@ class ChatDockUIMixin:
         self.chat_display.setOpenExternalLinks(False)
         self.chat_display.setOpenLinks(False)
         self.chat_display.setFont(QFont("Sans", 10))
-        self.chat_display.setStyleSheet(get_chat_display_stylesheet())
+        self.chat_display.setStyleSheet(get_chat_display_stylesheet(self.palette()))
         self.chat_display.anchorClicked.connect(self._handle_anchor_click)
         layout.addWidget(self.chat_display, 1)
 
@@ -107,11 +112,8 @@ class ChatDockUIMixin:
         self.input_edit.setPlaceholderText(translate("ChatDockWidget", "Describe what you want to create..."))
         self.input_edit.setMaximumHeight(80)
         self.input_edit.setFont(QFont("Sans", 10))
-        colors = _get_theme_colors()
-        self.input_edit.setStyleSheet(
-            f"QTextEdit {{ background-color: {colors['chat_bg']}; color: {colors['chat_text']}; "
-            f"border: 1px solid {colors['chat_border']}; }}"
-        )
+        colors = colors_from_palette(self.palette())
+        self.input_edit.setStyleSheet(qtextedit_palette_stylesheet(self.palette()))
         self.input_edit.installEventFilter(self)
         self.input_edit.image_added.connect(self._on_image_added)
         self.input_edit.document_added.connect(self._on_document_added)
@@ -129,10 +131,7 @@ class ChatDockUIMixin:
 
         self.send_btn = QPushButton(translate("ChatDockWidget", "Send"))
         self.send_btn.setMinimumHeight(30)
-        self.send_btn.setStyleSheet(
-            f"QPushButton {{ background-color: {colors['tool_success_border']}; color: white; "
-            f"font-weight: bold; padding: 8px 16px; }}"
-        )
+        self.send_btn.setStyleSheet(pushbutton_accent_stylesheet(self.palette()))
         self.send_btn.clicked.connect(self._send_message)
         btn_layout.addWidget(self.send_btn)
 
@@ -280,27 +279,23 @@ class ChatDockUIMixin:
 
     def _apply_theme(self):
         """Reapply all theme-dependent stylesheets."""
-        colors = _get_theme_colors()
+        colors = colors_from_palette(self.palette())
         theme_name = get_freecad_mode_name(force_refresh=True)
         self._resolve_stylesheet_conflict(theme_name)
         self._capture_btn.setStyleSheet(self._capture_btn_stylesheet())
-        self.chat_display.setStyleSheet(get_chat_display_stylesheet())
-        self.input_edit.setStyleSheet(
-            f"QTextEdit {{ background-color: {colors['chat_bg']}; color: {colors['chat_text']}; "
-            f"border: 1px solid {colors['chat_border']}; }}"
-        )
+        self.chat_display.setStyleSheet(get_chat_display_stylesheet(self.palette()))
+        self.input_edit.setStyleSheet(qtextedit_palette_stylesheet(self.palette()))
         if not self.send_btn.isEnabled():
-            # Loading state
-            self.send_btn.setStyleSheet(
-                f"QPushButton {{ background-color: {colors['system_label']}; color: white; "
-                f"font-weight: bold; padding: 8px 16px; }}"
-            )
+            self.send_btn.setStyleSheet(pushbutton_loading_stylesheet(self.palette()))
         else:
-            self.send_btn.setStyleSheet(
-                f"QPushButton {{ background-color: {colors['tool_success_border']}; color: white; "
-                f"font-weight: bold; padding: 8px 16px; }}"
-            )
+            self.send_btn.setStyleSheet(pushbutton_accent_stylesheet(self.palette()))
         self.token_label.setStyleSheet(f"color: {colors['thinking_text']}; font-size: 11px;")
+        colors_banner = colors_from_palette(self.palette())
+        self.danger_banner.setStyleSheet(
+            danger_banner_stylesheet(
+                colors_banner["tool_error_border"],
+                self.palette().color(QtGui.QPalette.HighlightedText).name(),
+            ))
 
     # ── Input history ───────────────────────────────────────
 

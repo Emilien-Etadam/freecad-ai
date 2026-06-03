@@ -5,7 +5,7 @@ import time
 from ..compat import QtWidgets, QtCore, QtGui
 from ...config import LOGS_DIR, get_config, prune_oldest_files, save_current_config
 from ...i18n import translate
-from ..message_view import render_message
+from ..message_view import render_message, render_assistant_stream_open
 from ..chat_utils import _run_reranker, _extract_latest_user_text, _is_binary_content
 from ..chat_workers import _LLMWorker, _CompactionWorker
 from ..chat_constants import TEXT_FILE_EXTENSIONS
@@ -51,7 +51,7 @@ class ChatDockSendMixin:
             "text": text, "images": [], "mode": mode,
         })
         if hook_result.get("block"):
-            self._append_html(render_message("system",
+            self._append_html(self._render_message("system",
                 f"Blocked by hook: {hook_result.get('reason', 'no reason given')}"))
             return
         if hook_result.get("modify"):
@@ -91,7 +91,7 @@ class ChatDockSendMixin:
         self.conversation.add_user_message(text, images=images, documents=documents)
         self._refresh_input_history()
         display_content = self.conversation.messages[-1]["content"]
-        self._append_html(render_message("user", display_content))
+        self._append_html(self._render_message("user", display_content))
         self._attachment_strip.clear()
 
         # Check if conversation needs compaction
@@ -288,12 +288,7 @@ class ChatDockSendMixin:
         # Start streaming
         self._set_loading(True)
         self._streaming_html = ""
-        self._append_html(
-            '<div style="margin: 8px 0; padding: 8px 12px; '
-            'background-color: #f5f5f5; border-radius: 6px;">'
-            '<div style="font-weight: bold; color: #2e7d32; margin-bottom: 4px;">AI</div>'
-            '<div style="white-space: pre-wrap;">'
-        )
+        self._append_html(render_assistant_stream_open(palette=self.palette()))
 
         self._in_thinking = False
         self._tool_results_stored = False

@@ -6,6 +6,7 @@ loop and collect user clicks before returning precise sub-element names.
 """
 
 from .compat import QtWidgets, QtCore
+from .theme_palette import label_muted_stylesheet
 
 
 class _SelectionObserver:
@@ -77,7 +78,7 @@ class SelectionPanel(QtWidgets.QWidget):
         # Type hint
         if select_type != "any":
             hint = QtWidgets.QLabel(f"(Accepting: {select_type}s only)")
-            hint.setStyleSheet("color: gray; font-style: italic;")
+            hint.setStyleSheet(label_muted_stylesheet(hint.palette()) + " font-style: italic;")
             layout.addWidget(hint)
 
         # Live selection list

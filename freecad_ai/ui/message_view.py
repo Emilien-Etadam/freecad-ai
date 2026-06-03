@@ -97,6 +97,46 @@ _DARK_THEME_COLORS = {
     "inline_code_text": "#f2f2f2",
 }
 
+# Optional palette used while rendering nested HTML (code blocks inside messages).
+_RENDER_PALETTE = None
+
+
+def _palette_role_ids():
+    """Return QPalette role ids, with stable fallbacks for headless CI."""
+    try:
+        from .compat import QtGui
+        qp = QtGui.QPalette
+        return qp.Base, qp.Text, qp.Mid, qp.AlternateBase
+    except ImportError:
+        return 9, 10, 11, 12
+
+
+def colors_from_palette(palette) -> dict:
+    """Build a theme color dict aligned with the active Qt palette."""
+    base_role, text_role, mid_role, alt_role = _palette_role_ids()
+    is_dark = palette.color(base_role).lightness() < 128
+    colors = dict(_DARK_THEME_COLORS if is_dark else _LIGHT_THEME_COLORS)
+    c = palette.color
+    colors["chat_bg"] = c(base_role).name()
+    colors["chat_text"] = c(text_role).name()
+    colors["chat_border"] = c(mid_role).name()
+    colors["code_bg"] = c(base_role).name()
+    colors["code_text"] = c(text_role).name()
+    colors["code_border"] = c(mid_role).name()
+    colors["stdout_text"] = c(text_role).name()
+    colors["inline_code_text"] = c(text_role).name()
+    colors["inline_code_bg"] = c(alt_role).name()
+    return colors
+
+
+def _resolve_colors(palette=None) -> dict:
+    """Return colors from an explicit palette, render context, or theme cache."""
+    pal = palette if palette is not None else _RENDER_PALETTE
+    if pal is not None:
+        return colors_from_palette(pal)
+    return _get_theme_colors()
+
+
 
 def _read_freecad_mode_name() -> str:
     """Read FreeCAD's current UI mode/theme name from preferences.
@@ -217,8 +257,11 @@ def _get_theme_colors(force_refresh: bool = False) -> dict:
     return _CACHED_THEME_COLORS
 
 
-def get_chat_display_stylesheet() -> str:
-    """Return QTextBrowser stylesheet based on current FreeCAD mode."""
+def get_chat_display_stylesheet(palette=None) -> str:
+    """Return QTextBrowser stylesheet from palette or cached theme."""
+    if palette is not None:
+        from .theme_palette import qtextbrowser_palette_stylesheet
+        return qtextbrowser_palette_stylesheet(palette)
     colors = _get_theme_colors()
     return (
         "QTextBrowser { "
@@ -229,49 +272,44 @@ def get_chat_display_stylesheet() -> str:
     )
 
 
-def render_message(role: str, content) -> str:
-    """Render a single chat message as an HTML block.
-
-    Args:
-        role: "user", "assistant", or "system"
-        content: The message text (str) or list of content blocks
-
-    Returns:
-        HTML string for insertion into QTextBrowser
-    """
-    colors = _get_theme_colors()
-
-    if role == "user":
-        label = translate("MessageView", "You")
-        bg_color = colors["user_bg"]
-        label_color = colors["user_label"]
-    elif role == "assistant":
-        label = translate("MessageView", "AI")
-        bg_color = colors["assistant_bg"]
-        label_color = colors["assistant_label"]
-    else:
-        label = translate("MessageView", "System")
-        bg_color = colors["system_bg"]
-        label_color = colors["system_label"]
-
-    if isinstance(content, list):
-        formatted_content = _format_content_blocks(content)
-    else:
-        formatted_content = _format_content(content)
-
-    return (
-        f'<div style="margin: 8px 0; padding: 8px 12px; '
-        f'background-color: {bg_color}; border-radius: 6px;">'
-        f'<div style="font-weight: bold; color: {label_color}; '
-        f'margin-bottom: 4px;">{label}</div>'
-        f'<div style="white-space: pre-wrap;">{formatted_content}</div>'
-        f'</div>'
-    )
+def render_message(role: str, content, palette=None) -> str:
+    """Render a single chat message as an HTML block."""
+    global _RENDER_PALETTE
+    old_palette = _RENDER_PALETTE
+    _RENDER_PALETTE = palette
+    try:
+        colors = _resolve_colors(palette)
+        if role == "user":
+            label = translate("MessageView", "You")
+            bg_color = colors["user_bg"]
+            label_color = colors["user_label"]
+        elif role == "assistant":
+            label = translate("MessageView", "AI")
+            bg_color = colors["assistant_bg"]
+            label_color = colors["assistant_label"]
+        else:
+            label = translate("MessageView", "System")
+            bg_color = colors["system_bg"]
+            label_color = colors["system_label"]
+        if isinstance(content, list):
+            formatted_content = _format_content_blocks(content)
+        else:
+            formatted_content = _format_content(content)
+        return (
+            f'<div style="margin: 8px 0; padding: 8px 12px; '
+            f'background-color: {bg_color}; border-radius: 6px;">'
+            f'<div style="font-weight: bold; color: {label_color}; '
+            f'margin-bottom: 4px;">{label}</div>'
+            f'<div style="white-space: pre-wrap;">{formatted_content}</div>'
+            f'</div>'
+        )
+    finally:
+        _RENDER_PALETTE = old_palette
 
 
-def render_code_block(code: str, language: str = "python") -> str:
+def render_code_block(code: str, language: str = "python", palette=None) -> str:
     """Render a code block as a standalone HTML element with a copy-friendly format."""
-    colors = _get_theme_colors()
+    colors = _resolve_colors(palette)
     escaped = html.escape(code.strip())
     return (
         f'<div style="margin: 6px 0; background-color: {colors["code_bg"]}; '
@@ -284,9 +322,9 @@ def render_code_block(code: str, language: str = "python") -> str:
     )
 
 
-def render_execution_result(success: bool, stdout: str, stderr: str) -> str:
+def render_execution_result(success: bool, stdout: str, stderr: str, palette=None) -> str:
     """Render code execution results."""
-    colors = _get_theme_colors()
+    colors = _resolve_colors(palette)
 
     if success:
         icon = "&#10003;"  # checkmark
@@ -326,7 +364,7 @@ def render_execution_result(success: bool, stdout: str, stderr: str) -> str:
 
 
 def render_tool_call(tool_name: str, call_id: str, started: bool = True,
-                     success: bool = True, output: str = "") -> str:
+                     success: bool = True, output: str = "", palette=None) -> str:
     """Render a tool call indicator in the chat.
 
     Args:
@@ -336,7 +374,7 @@ def render_tool_call(tool_name: str, call_id: str, started: bool = True,
         success: Whether the tool call succeeded (only used when started=False)
         output: Tool result output (only used when started=False)
     """
-    colors = _get_theme_colors()
+    colors = _resolve_colors(palette)
 
     if started:
         calling_text = translate("MessageView", "Calling {}...").format(
@@ -383,7 +421,7 @@ def render_tool_call(tool_name: str, call_id: str, started: bool = True,
         return "".join(parts)
 
 
-def render_tool_summary(timeline: list[dict]) -> str:
+def render_tool_summary(timeline: list[dict], palette=None) -> str:
     """Render a compact summary of tool calls after the agentic loop.
 
     Args:
@@ -394,7 +432,7 @@ def render_tool_summary(timeline: list[dict]) -> str:
     if not timeline:
         return ""
 
-    colors = _get_theme_colors()
+    colors = _resolve_colors(palette)
     total = len(timeline)
     succeeded = sum(1 for t in timeline if t["success"])
     failed = total - succeeded
@@ -453,9 +491,9 @@ def render_tool_summary(timeline: list[dict]) -> str:
     )
 
 
-def _render_thinking_block(thinking_text: str) -> str:
+def _render_thinking_block(thinking_text: str, palette=None) -> str:
     """Render a <think> block as a dimmed, collapsible-style block."""
-    colors = _get_theme_colors()
+    colors = _resolve_colors(palette)
 
     escaped = html.escape(thinking_text.strip())
     # Truncate very long thinking
@@ -534,7 +572,7 @@ def _format_content(text: str) -> str:
 
 def _format_inline(text: str) -> str:
     """Apply inline formatting (bold, italic, inline code) to already-escaped HTML text."""
-    colors = _get_theme_colors()
+    colors = _resolve_colors()
 
     # Inline code
     text = INLINE_CODE_RE.sub(
@@ -550,3 +588,97 @@ def _format_inline(text: str) -> str:
     # Italic
     text = ITALIC_RE.sub(r"<i>\1</i>", text)
     return text
+
+
+def render_hint(text: str, palette=None) -> str:
+    """Subtle inline hint (vision tip, notes)."""
+    colors = _resolve_colors(palette)
+    return (
+        f'<div style="color: {colors["thinking_text"]}; font-size: 9pt; '
+        f'margin: 4px 12px;">{html.escape(text)}</div>'
+    )
+
+
+def render_status_line(text: str, variant: str = "info", palette=None) -> str:
+    """Compact status banner (compaction, MCP, warnings)."""
+    colors = _resolve_colors(palette)
+    if variant == "success":
+        bg = colors["tool_success_bg"]
+        border = colors["tool_success_border"]
+        fg = colors["tool_success_text"]
+    elif variant == "warning":
+        bg = colors["system_bg"]
+        border = colors["system_label"]
+        fg = colors["system_label"]
+    elif variant == "error":
+        bg = colors["tool_error_bg"]
+        border = colors["tool_error_border"]
+        fg = colors["tool_error_text"]
+    else:
+        bg = colors["thinking_bg"]
+        border = colors["thinking_border"]
+        fg = colors["thinking_text"]
+    return (
+        f'<div style="margin: 4px 0; padding: 6px 10px; '
+        f'background-color: {bg}; border-left: 3px solid {border}; '
+        f'border-radius: 0 4px 4px 0; font-size: 12px; color: {fg};">'
+        f'{html.escape(text)}</div>'
+    )
+
+
+def render_assistant_stream_open(palette=None) -> str:
+    """Open an assistant streaming message container."""
+    colors = _resolve_colors(palette)
+    return (
+        f'<div style="margin: 8px 0; padding: 8px 12px; '
+        f'background-color: {colors["assistant_bg"]}; border-radius: 6px;">'
+        f'<div style="font-weight: bold; color: {colors["assistant_label"]}; '
+        f'margin-bottom: 4px;">{translate("MessageView", "AI")}</div>'
+        f'<div style="white-space: pre-wrap;">'
+    )
+
+
+def render_thinking_stream_open(palette=None) -> str:
+    """Open a live thinking stream block."""
+    colors = _resolve_colors(palette)
+    return (
+        f'<div style="margin: 4px 0; padding: 4px 8px; '
+        f'background-color: {colors["thinking_bg"]}; '
+        f'border-left: 2px solid {colors["thinking_border"]}; '
+        f'font-size: 11px; color: {colors["thinking_text"]}; font-style: italic;">'
+        f'<span style="color: {colors["thinking_label"]};">'
+        f'{translate("MessageView", "Thinking...")}</span><br>'
+    )
+
+
+def render_thinking_stream_chunk(chunk: str, palette=None) -> str:
+    """Append escaped text to an open thinking stream block."""
+    colors = _resolve_colors(palette)
+    escaped = html.escape(chunk).replace("\n", "<br>")
+    return (
+        f'<span style="color: {colors["thinking_text"]}; font-size: 11px;">'
+        f'{escaped}</span>'
+    )
+
+
+def render_plan_buttons(code: str, palette=None) -> str:
+    """Plan-mode Execute/Copy anchor buttons."""
+    import base64
+
+    colors = _resolve_colors(palette)
+    encoded = base64.b64encode(code.encode()).decode()
+    execute_lbl = translate("MessageView", "Execute")
+    copy_lbl = translate("MessageView", "Copy")
+    return (
+        '<div style="margin: 2px 0 8px 0;">'
+        f'<a href="execute:{encoded}" style="text-decoration: none; '
+        f'background-color: {colors["tool_success_border"]}; '
+        f'color: {colors["chat_bg"]}; padding: 3px 12px; '
+        f'border-radius: 3px; font-size: 12px; margin-right: 6px;">'
+        f'{execute_lbl}</a> '
+        f'<a href="copy:{encoded}" style="text-decoration: none; '
+        f'background-color: {colors["code_lang_bg"]}; '
+        f'color: {colors["code_text"]}; padding: 3px 12px; '
+        f'border-radius: 3px; font-size: 12px;">{copy_lbl}</a>'
+        '</div>'
+    )

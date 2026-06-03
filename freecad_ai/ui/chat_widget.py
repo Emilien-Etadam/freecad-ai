@@ -183,6 +183,34 @@ class ChatDockWidget(
         self._refresh_input_history()
 
 
+
+    # ── Palette-aware HTML wrappers (used by chat_dock mixins) ──
+
+    def _render_message(self, role, content):
+        from .message_view import render_message
+        return render_message(role, content, palette=self.palette())
+
+    def _render_tool_call(
+        self, tool_name, call_id, started=True, success=True, output="",
+    ):
+        from .message_view import render_tool_call
+        return render_tool_call(
+            tool_name, call_id,
+            started=started, success=success, output=output,
+            palette=self.palette(),
+        )
+
+    def _render_execution_result(self, success, stdout, stderr):
+        from .message_view import render_execution_result
+        return render_execution_result(
+            success, stdout, stderr, palette=self.palette(),
+        )
+
+    def _render_tool_summary(self, timeline):
+        from .message_view import render_tool_summary
+        return render_tool_summary(timeline, palette=self.palette())
+
+
     def eventFilter(self, obj, event):
         """Main-window shutdown + input history key handling."""
         try:

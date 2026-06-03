@@ -6,6 +6,7 @@ from ..compat import QtWidgets, QtCore, QtGui
 from ...config import get_config
 from ...i18n import translate
 from ..message_view import (
+    render_plan_buttons,
     render_message,
     render_code_block,
     render_execution_result,
@@ -43,14 +44,14 @@ class ChatDockDisplayMixin:
                 elif msg["role"] == "assistant" and msg.get("tool_calls"):
                     # Render assistant text + tool call indicators
                     if msg.get("content"):
-                        html_parts.append(render_message("assistant", msg["content"]))
+                        html_parts.append(self._render_message("assistant", msg["content"]))
                     for tc in msg["tool_calls"]:
-                        html_parts.append(render_tool_call(
+                        html_parts.append(self._render_tool_call(
                             tc["name"], tc["id"], started=False, success=True,
                             output=f"Called with: {json.dumps(tc['arguments'], indent=2)}"
                         ))
                 else:
-                    html_parts.append(render_message(msg["role"], msg.get("content", "")))
+                    html_parts.append(self._render_message(msg["role"], msg.get("content", "")))
 
                 if mode == "plan" and msg["role"] == "assistant":
                     content = Conversation.extract_text(msg.get("content", ""))
@@ -68,23 +69,7 @@ class ChatDockDisplayMixin:
 
     def _make_plan_buttons_html(self, code):
         """Create HTML for Plan mode Execute/Copy buttons."""
-        import base64
-        encoded = base64.b64encode(code.encode()).decode()
-        return (
-            '<div style="margin: 2px 0 8px 0;">'
-            '<a href="execute:{encoded}" style="text-decoration: none; '
-            'background-color: #2e7d32; color: white; padding: 3px 12px; '
-            'border-radius: 3px; font-size: 12px; margin-right: 6px;">'
-            '{execute}</a> '
-            '<a href="copy:{encoded}" style="text-decoration: none; '
-            'background-color: #666; color: white; padding: 3px 12px; '
-            'border-radius: 3px; font-size: 12px;">{copy}</a>'
-            '</div>'.format(
-                encoded=encoded,
-                execute=translate("ChatDockWidget", "Execute"),
-                copy=translate("ChatDockWidget", "Copy"),
-            )
-        )
+        return render_plan_buttons(code, palette=self.palette())
 
     def _handle_anchor_click(self, url):
         """Handle clicks on anchor links in the chat (Execute/Copy/Image buttons)."""
@@ -151,21 +136,15 @@ class ChatDockDisplayMixin:
 
     def _set_loading(self, loading):
         """Enable/disable input while LLM is processing."""
-        colors = _get_theme_colors()
+        from ..theme_palette import pushbutton_loading_stylesheet, pushbutton_accent_stylesheet
         self.send_btn.setEnabled(True)
         self.input_edit.setReadOnly(loading)
         if loading:
             self.send_btn.setText("Stop")
-            self.send_btn.setStyleSheet(
-                f"QPushButton {{ background-color: {colors['system_label']}; color: white; "
-                f"font-weight: bold; padding: 8px 16px; }}"
-            )
+            self.send_btn.setStyleSheet(pushbutton_loading_stylesheet(self.palette()))
         else:
             self.send_btn.setText(translate("ChatDockWidget", "Send"))
-            self.send_btn.setStyleSheet(
-                f"QPushButton {{ background-color: {colors['tool_success_border']}; color: white; "
-                f"font-weight: bold; padding: 8px 16px; }}"
-            )
+            self.send_btn.setStyleSheet(pushbutton_accent_stylesheet(self.palette()))
 
     def _update_token_count(self):
         """Update the token estimate display."""

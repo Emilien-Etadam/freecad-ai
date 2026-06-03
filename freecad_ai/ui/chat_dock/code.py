@@ -36,7 +36,7 @@ class ChatDockCodeMixin:
                 if not result:
                     continue
 
-            self._append_html(render_execution_result(
+            self._append_html(self._render_execution_result(
                 result.success, result.stdout, result.stderr
             ))
 
@@ -50,7 +50,7 @@ class ChatDockCodeMixin:
     def _handle_execution_error(self, result):
         """Handle code execution failure — send error back to LLM for self-correction."""
         if self._retry_count >= get_config().max_retries:
-            self._append_html(render_message(
+            self._append_html(self._render_message(
                 "system",
                 translate("ChatDockWidget",
                           "Max retries ({}) reached. "
@@ -77,7 +77,7 @@ class ChatDockCodeMixin:
                   if capture_mode != "off" else None)
         self.conversation.add_system_message(
             error_msg, images=[vp_img] if vp_img else None)
-        self._append_html(render_message("system", error_msg))
+        self._append_html(self._render_message("system", error_msg))
 
         from ..core.system_prompt import build_system_prompt
         from ..llm.client import should_strip_thinking
@@ -119,7 +119,7 @@ class ChatDockCodeMixin:
         result = dlg.get_result()
 
         if result:
-            self._append_html(render_execution_result(
+            self._append_html(self._render_execution_result(
                 result.success, result.stdout, result.stderr
             ))
             if result.success:
@@ -155,7 +155,7 @@ class ChatDockCodeMixin:
         self.conversation.add_user_message(text, images=pending_images,
                                            documents=pending_docs)
         display_content = self.conversation.messages[-1]["content"]
-        self._append_html(render_message("user", display_content))
+        self._append_html(self._render_message("user", display_content))
         self._attachment_strip.clear()
 
         # Execute the skill
@@ -176,7 +176,7 @@ class ChatDockCodeMixin:
             # Trigger LLM with the injected prompt
             self._send_with_injected_prompt()
         elif exec_result.get("output"):
-            self._append_html(render_message("system", exec_result["output"]))
+            self._append_html(self._render_message("system", exec_result["output"]))
             self.conversation.add_system_message(exec_result["output"])
 
         return True
