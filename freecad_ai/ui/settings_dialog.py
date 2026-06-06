@@ -280,6 +280,22 @@ class SettingsDialog(QDialog):
             translate("SettingsDialog", "Max tool-loop turns (0 = endless):"),
             self.max_tool_turns_spin)
 
+        self.execution_timeout_spin = QSpinBox()
+        self.execution_timeout_spin.setRange(5, 600)
+        self.execution_timeout_spin.setSingleStep(5)
+        self.execution_timeout_spin.setValue(60)
+        self.execution_timeout_spin.setSuffix(translate("SettingsDialog", " s"))
+        self.execution_timeout_spin.setToolTip(
+            translate("SettingsDialog",
+                      "Time budget for executing one generated code block "
+                      "(sandbox dry-run and live run).\n"
+                      "Raise it for heavy operations on large/detailed models "
+                      "(e.g. scaling). Default: 60.")
+        )
+        fixed_layout.addRow(
+            translate("SettingsDialog", "Code execution timeout:"),
+            self.execution_timeout_spin)
+
         model_params_layout.addLayout(fixed_layout)
 
         # Freeform sampling parameters table (saved per model name)
@@ -815,6 +831,7 @@ class SettingsDialog(QDialog):
         self.max_tokens_spin.setValue(cfg.max_tokens)
         self.context_window_spin.setValue(cfg.context_window)
         self.max_tool_turns_spin.setValue(cfg.max_tool_turns)
+        self.execution_timeout_spin.setValue(cfg.execution_timeout)
 
         # Model parameters table
         self._load_model_params_table(cfg.provider.model, cfg)
@@ -1094,6 +1111,7 @@ class SettingsDialog(QDialog):
         cfg.max_tokens = self.max_tokens_spin.value()
         cfg.context_window = self.context_window_spin.value()
         cfg.max_tool_turns = self.max_tool_turns_spin.value()
+        cfg.execution_timeout = self.execution_timeout_spin.value()
 
         # Save model parameters for the current model
         model_name = self.model_edit.text().strip()

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.1-alpha] - 2026-06-06
+
+A bug-fix patch for [issue #14](https://github.com/ghbalf/freecad-ai/issues/14): generated code could time out on large or detailed models regardless of the operation, with no way to extend the limit.
+
+### Fixed
+
+- **Code-execution timeout is now configurable, and the default was raised 30 → 60s** (`freecad_ai/core/executor.py`, `freecad_ai/config.py`, `freecad_ai/ui/settings_dialog.py`). The budget applied to **both** the headless sandbox pre-check and live execution was hardcoded at 30s. Heavy-but-valid geometry operations — most notably scaling a detailed or imported model via `Shape.transformGeometry`, whose cost grows with the model's face count — genuinely exceed 30s and were killed on both paths with no recourse. The previous patch ([0.15.1-alpha](https://github.com/ghbalf/freecad-ai/releases/tag/v0.15.1-alpha)) only moved the wall from 15s to 30s. A new **"Code execution timeout"** setting (Settings, range 5–600s) now controls this budget; `execute_code` reads it when no explicit timeout is given, so large-model users can raise it as needed. ([issue #14](https://github.com/ghbalf/freecad-ai/issues/14), reported by trougnouf; still-broken reports by JohnMcLear and galberding) ([#24](https://github.com/ghbalf/freecad-ai/pull/24))
+
+### Tests
+
+- Unit: `tests/unit/test_config.py` (`execution_timeout` default and round-trip) and `tests/unit/test_executor.py::TestConfigurableExecutionTimeout` (`execute_code` honors the configured value and the new 60s default when no explicit timeout is passed).
+
 ## [0.16.0-alpha] - 2026-06-03
 
 A feature release adding a datum-geometry and transform/duplicate toolset — sketching on faces and named planes, parametric datum planes and lines, relative transforms, and independent parametric copies — together with a sandbox fix that unblocks editing imported (mesh→solid) parts. This work grew out of [issue #18](https://github.com/ghbalf/freecad-ai/issues/18) (reported by 0xrushi): a snap-fit workflow on an imported solid that fell out of the parametric toolchain.

@@ -98,6 +98,19 @@ class TestAppConfig:
         assert restored.temperature == 0.7
         assert restored.thinking == "on"
 
+    def test_execution_timeout_default(self):
+        # Issue #14 (reopened): the execution timeout was hardcoded at 30s and
+        # too short for heavy-geometry ops (e.g. scaling a detailed model). It
+        # is now a configurable field; the default was bumped 30 -> 60.
+        c = AppConfig()
+        assert c.execution_timeout == 60
+
+    def test_execution_timeout_roundtrip(self):
+        c = AppConfig()
+        c.execution_timeout = 180
+        c2 = AppConfig.from_dict(c.to_dict())
+        assert c2.execution_timeout == 180
+
     def test_chat_dock_state_defaults(self):
         c = AppConfig()
         assert c.chat_dock_floating is False

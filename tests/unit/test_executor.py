@@ -256,6 +256,52 @@ class TestSandboxTimeout:
         )
 
 
+class TestConfigurableExecutionTimeout:
+    """Issue #14 (reopened): the execution timeout was hardcoded at 30s with no
+    user override, so heavy-but-valid operations — scaling a detailed model via
+    Shape.transformGeometry, whose cost is O(geometry complexity) — exceeded 30s
+    and failed on BOTH the sandbox dry-run and the live SIGALRM path. The timeout
+    is now sourced from AppConfig.execution_timeout (default 60) whenever the
+    caller passes no explicit timeout, so users can raise it for big models.
+    """
+
+    def _captured_timeout(self, configured):
+        from freecad_ai.config import AppConfig
+
+        seen = {}
+
+        def _capture(code, timeout=15, document_path=None):
+            seen["timeout"] = timeout
+            return True, ""
+
+        cfg = AppConfig()
+        if configured is not None:
+            cfg.execution_timeout = configured
+
+        with patch("freecad_ai.config.get_config", return_value=cfg):
+            with patch(
+                "freecad_ai.core.executor._sandbox_test", side_effect=_capture
+            ):
+                with patch(
+                    "freecad_ai.core.active_document.get_synced_active_document",
+                    return_value=None,
+                ):
+                    executor.execute_code("x = 1")  # no explicit timeout
+        return seen["timeout"]
+
+    def test_default_execution_timeout_is_60(self):
+        assert self._captured_timeout(None) == 60, (
+            "execute_code() with no explicit timeout must use the bumped "
+            "60s default, not the old hardcoded 30s"
+        )
+
+    def test_configured_execution_timeout_is_honored(self):
+        assert self._captured_timeout(120) == 120, (
+            "execute_code() must source its timeout from "
+            "AppConfig.execution_timeout when the caller passes none"
+        )
+
+
 class TestCollectObjectIssues:
     """Post-execution validation must blame the code only for shapes it
     created or newly broke — never for objects that were already invalid
