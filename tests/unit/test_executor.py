@@ -256,6 +256,54 @@ class TestSandboxTimeout:
         )
 
 
+class TestSandboxHarnessForcesExit:
+    """Issue #14: the sandbox harness wrote its result file but never forced the
+    interpreter to exit. On FreeCAD builds where running a script via `-c`
+    against an OPENED document leaves the process in interactive mode (the
+    Qt/console event loop never returns), the subprocess never terminated, so
+    `subprocess.run()` blocked until its timeout and the sandbox reported a
+    spurious "code timed out" — even for trivial code.
+
+    The hang itself is build-/timing-dependent and not reliably reproducible in
+    CI, so this guards the invariant instead: the generated harness must force a
+    process exit after writing its result. Diagnosed and first patched by
+    @galberding on the issue thread.
+    """
+
+    def test_generated_harness_forces_process_exit(self):
+        captured = {}
+
+        class _FakeProc:
+            returncode = 0
+
+        def _fake_run(cmd, **kwargs):
+            # cmd == [freecad_bin, "-c", script_file]; capture the harness the
+            # sandbox wrote before it would have run FreeCAD.
+            with open(cmd[2]) as fh:
+                captured["harness"] = fh.read()
+            return _FakeProc()
+
+        with patch(
+            "freecad_ai.core.executor._find_freecad_cmd",
+            return_value="/usr/bin/freecadcmd",
+        ):
+            with patch(
+                "freecad_ai.core.executor.subprocess.run", side_effect=_fake_run
+            ):
+                executor._sandbox_test("x = 1", timeout=5)
+
+        harness = captured.get("harness", "")
+        assert harness, "sandbox did not generate a harness script"
+        forces_exit = any(
+            tok in harness for tok in ("os._exit(", "sys.exit(")
+        )
+        assert forces_exit, (
+            "sandbox harness must force the interpreter to exit after writing "
+            "its result, or the FreeCAD subprocess can hang until timeout "
+            "(issue #14)"
+        )
+
+
 class TestConfigurableExecutionTimeout:
     """Issue #14 (reopened): the execution timeout was hardcoded at 30s with no
     user override, so heavy-but-valid operations — scaling a detailed model via
@@ -289,10 +337,9 @@ class TestConfigurableExecutionTimeout:
                     executor.execute_code("x = 1")  # no explicit timeout
         return seen["timeout"]
 
-    def test_default_execution_timeout_is_60(self):
-        assert self._captured_timeout(None) == 60, (
-            "execute_code() with no explicit timeout must use the bumped "
-            "60s default, not the old hardcoded 30s"
+    def test_default_execution_timeout_is_30(self):
+        assert self._captured_timeout(None) == 30, (
+            "execute_code() with no explicit timeout must use the 30s default"
         )
 
     def test_configured_execution_timeout_is_honored(self):

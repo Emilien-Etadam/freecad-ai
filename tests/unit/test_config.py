@@ -99,11 +99,12 @@ class TestAppConfig:
         assert restored.thinking == "on"
 
     def test_execution_timeout_default(self):
-        # Issue #14 (reopened): the execution timeout was hardcoded at 30s and
-        # too short for heavy-geometry ops (e.g. scaling a detailed model). It
-        # is now a configurable field; the default was bumped 30 -> 60.
+        # Issue #14: the execution timeout was hardcoded with no override. It is
+        # now a configurable field (kept at the long-standing 30s default; the
+        # real #14 fix was the sandbox no longer hanging — raising the budget
+        # only helps genuinely-slow ops on large models).
         c = AppConfig()
-        assert c.execution_timeout == 60
+        assert c.execution_timeout == 30
 
     def test_execution_timeout_roundtrip(self):
         c = AppConfig()

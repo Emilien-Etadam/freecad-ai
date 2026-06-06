@@ -283,14 +283,14 @@ class SettingsDialog(QDialog):
         self.execution_timeout_spin = QSpinBox()
         self.execution_timeout_spin.setRange(5, 600)
         self.execution_timeout_spin.setSingleStep(5)
-        self.execution_timeout_spin.setValue(60)
+        self.execution_timeout_spin.setValue(30)
         self.execution_timeout_spin.setSuffix(translate("SettingsDialog", " s"))
         self.execution_timeout_spin.setToolTip(
             translate("SettingsDialog",
                       "Time budget for executing one generated code block "
                       "(sandbox dry-run and live run).\n"
                       "Raise it for heavy operations on large/detailed models "
-                      "(e.g. scaling). Default: 60.")
+                      "(e.g. scaling). Default: 30.")
         )
         fixed_layout.addRow(
             translate("SettingsDialog", "Code execution timeout:"),

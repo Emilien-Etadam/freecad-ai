@@ -237,6 +237,14 @@ finally:
         pass
     with open({result_path!r}, "w") as f:
         json.dump(result, f)
+    # Force the interpreter to exit. On some FreeCAD builds, running a script
+    # via `-c` against an OPENED document leaves the process in interactive
+    # mode (Qt/console event loop never returns), so subprocess.run() would
+    # block until its timeout and the sandbox always reported a spurious
+    # "timed out" — even for trivial code (issue #14). os._exit skips atexit
+    # handlers / lingering non-daemon threads that a plain sys.exit can wait on.
+    import os as _os
+    _os._exit(0)
 '''.format(
         collect_fn_src=inspect.getsource(_collect_object_issues),
         open_block=open_block,
@@ -308,7 +316,7 @@ def _auto_save(namespace: dict):
         pass  # Best-effort
 
 
-_DEFAULT_EXECUTION_TIMEOUT = 60
+_DEFAULT_EXECUTION_TIMEOUT = 30
 
 
 def _configured_timeout(default: int = _DEFAULT_EXECUTION_TIMEOUT) -> int:
