@@ -308,7 +308,27 @@ def _auto_save(namespace: dict):
         pass  # Best-effort
 
 
-def execute_code(code: str, timeout: int = 30, sandbox: bool = True,
+_DEFAULT_EXECUTION_TIMEOUT = 60
+
+
+def _configured_timeout(default: int = _DEFAULT_EXECUTION_TIMEOUT) -> int:
+    """Resolve the execution timeout (seconds) from user config.
+
+    Heavy-but-valid geometry ops (e.g. scaling a detailed model via
+    Shape.transformGeometry) can exceed a fixed budget; sourcing it from
+    config lets users raise it for large models instead of hitting a
+    hardcoded wall on both the sandbox and live paths (issue #14). Falls
+    back to ``default`` if config is unavailable or holds a bad value.
+    """
+    try:
+        from ..config import get_config
+        val = int(getattr(get_config(), "execution_timeout", default))
+        return val if val > 0 else default
+    except Exception:
+        return default
+
+
+def execute_code(code: str, timeout: int | None = None, sandbox: bool = True,
                  skip_safety: bool = False) -> ExecutionResult:
     """Execute Python code in FreeCAD's context.
 
@@ -321,10 +341,16 @@ def execute_code(code: str, timeout: int = 30, sandbox: bool = True,
       3. Undo transactions (roll back on Python-level failure)
       4. Auto-save (backup document before execution)
 
+    timeout: Wall-clock budget (seconds) applied to both the sandbox dry-run
+        and the live SIGALRM. ``None`` (the default) resolves it from
+        ``AppConfig.execution_timeout`` so the GUI's setting is honored.
+
     skip_safety: When True, skip static validation, the headless sandbox
         pre-check, and the SIGALRM timeout. The undo transaction (rollback on
         failure) and auto-save remain active. Used by Dangerous mode only.
     """
+    if timeout is None:
+        timeout = _configured_timeout()
     # Layer 1: Static validation (skipped in dangerous mode)
     if not skip_safety:
         warnings = _validate_code(code)

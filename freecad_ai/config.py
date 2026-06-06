@@ -399,6 +399,13 @@ class AppConfig:
     # Max agentic tool-loop turns per user message. 0 = endless (the Stop
     # button is then the only brake). Default 30 preserves prior behavior.
     max_tool_turns: int = 30
+    # Wall-clock budget (seconds) for executing a single generated code block —
+    # applied to BOTH the headless sandbox dry-run and the live SIGALRM. Heavy
+    # but valid geometry ops (e.g. scaling a detailed model via
+    # Shape.transformGeometry, whose cost grows with face count) can exceed the
+    # old hardcoded 30s; the default was bumped to 60 and made user-tunable so
+    # large models are not falsely killed (issue #14).
+    execution_timeout: int = 60
     enable_tools: bool = True
     thinking: str = "off"  # "off", "on", "extended"
     strip_thinking_history: bool | None = None  # None=auto-detect, True/False=override
