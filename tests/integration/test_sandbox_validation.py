@@ -127,3 +127,69 @@ class TestSandboxIgnoresPreexistingInvalidity:
         ok, err = _sandbox_test(_INVALID_SOLID, timeout=90)
         assert ok is False, "a newly-created invalid shape must still fail"
         assert "invalid shape" in err, "failure must name the invalid shape"
+
+
+@pytest.fixture
+def simple_saved_doc(freecad_available):
+    """Path to a trivial saved .FCStd (one box) — exercises the openDocument
+    branch of the sandbox harness."""
+    fd, doc_path = tempfile.mkstemp(suffix=".FCStd")
+    os.close(fd)
+    os.unlink(doc_path)
+    builder = (
+        "import FreeCAD as App, Part\n"
+        "doc = App.newDocument('Simple')\n"
+        "f = doc.addObject('Part::Feature', 'Box')\n"
+        "f.Shape = Part.makeBox(10, 10, 10)\n"
+        "doc.recompute()\n"
+        "doc.saveAs(" + repr(doc_path) + ")\n"
+        "exit(0)\n"
+    )
+    script = tempfile.mktemp(suffix=".py")
+    with open(script, "w") as fh:
+        fh.write(builder)
+    subprocess.run(
+        [_find_freecad_cmd(), "-c", script],
+        capture_output=True,
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+        timeout=120,
+    )
+    assert os.path.isfile(doc_path), "fixture failed to save the document"
+    yield doc_path
+    for p in (doc_path, script):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+
+
+class TestSandboxExitsAgainstOpenedDocument:
+    """Regression for issue #14: the harness script wrote its result file but
+    never forced the interpreter to exit. On FreeCAD builds where running a
+    script via `-c` against an OPENED document leaves the process in
+    interactive mode (the Qt/console event loop never returns), the subprocess
+    never terminated, so subprocess.run() blocked until its timeout and the
+    sandbox reported a spurious "code timed out" — even for trivial code like
+    creating a box. The harness now calls os._exit(0) after writing the result.
+
+    Diagnosed and first patched by @galberding on the issue thread.
+    """
+
+    def test_trivial_code_against_opened_document_does_not_hang(
+        self, simple_saved_doc
+    ):
+        # Without the os._exit(0) fix this blocks for the full timeout and
+        # returns ("Sandbox: code timed out after N seconds"); with it, the
+        # subprocess exits as soon as the result file is written.
+        code = (
+            "f = doc.addObject('Part::Feature', 'Box2')\n"
+            "import Part\n"
+            "f.Shape = Part.makeBox(5, 5, 5)\n"
+            "doc.recompute()\n"
+        )
+        ok, err = _sandbox_test(code, timeout=30, document_path=simple_saved_doc)
+        assert "timed out" not in err, (
+            "sandbox hung on the openDocument path — the harness must force "
+            "the interpreter to exit after writing its result (issue #14)"
+        )
+        assert ok is True, "trivial valid code on an opened document must pass; got err=" + err

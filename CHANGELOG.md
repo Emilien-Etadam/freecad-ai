@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.2-alpha] - 2026-06-06
+
+A bug-fix patch for [issue #14](https://github.com/ghbalf/freecad-ai/issues/14): the headless sandbox pre-check could time out on *any* operation — even a trivial one — whenever a saved document was open, making Act mode unusable on affected setups. This supersedes the v0.16.1-alpha timeout change, which addressed the wrong cause.
+
+### Fixed
+
+- **Sandbox dry-run hung against an open document** (`freecad_ai/core/executor.py`). The harness script wrote its result file but never forced the interpreter to exit. On FreeCAD builds where running a script via `-c` against an opened document leaves the process in interactive mode (the Qt/console event loop never returns), the subprocess never terminated, so the pre-check blocked until its timeout and reported a spurious "code timed out after N seconds" — regardless of what the code did (even, e.g., "render a cube"). The harness now calls `os._exit(0)` after writing its result, so the subprocess always terminates promptly. Diagnosed and first patched by @galberding; also reported by @JohnMcLear and @trougnouf. ([issue #14](https://github.com/ghbalf/freecad-ai/issues/14))
+
+### Changed
+
+- **`execution_timeout` default reverted to 30s** (from the 60s introduced in v0.16.1-alpha). With the hang fixed, the higher default only lengthened the wait before a genuinely-stuck operation was cancelled; the setting remains user-tunable (range 5--600s) for heavy operations on large models.
+
+### Tests
+
+- Unit: `tests/unit/test_executor.py::TestSandboxHarnessForcesExit` (the generated harness must force a process exit). Integration: `tests/integration/test_sandbox_validation.py::TestSandboxExitsAgainstOpenedDocument` (trivial code on an opened document returns instead of timing out).
+
 ## [0.16.1-alpha] - 2026-06-06
 
 A bug-fix patch for [issue #14](https://github.com/ghbalf/freecad-ai/issues/14): generated code could time out on large or detailed models regardless of the operation, with no way to extend the limit.
