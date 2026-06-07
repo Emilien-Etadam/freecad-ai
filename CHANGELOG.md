@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.3-alpha] - 2026-06-07
+
+A bug-fix patch for two headless-sandbox false positives: the pre-check rejected valid code that runs fine in the real FreeCAD GUI, blocking common workflows. Reported on [issue #18](https://github.com/ghbalf/freecad-ai/issues/18) (@0xrushi) and [issue #14](https://github.com/ghbalf/freecad-ai/issues/14) (@JohnMcLear).
+
+### Fixed
+
+- **Empty sketches were flagged as broken** (`freecad_ai/core/executor.py`). "Create a sketch on the selected face" produces an empty sketch (geometry is drawn later in the editor). On FreeCAD 1.1 an empty `Sketcher::SketchObject` reports `Shape.isNull() == True` while its `State` stays `Up-to-date` — a valid intermediate state, not a defect — but the post-execution validator reported `has null shape` and failed every retry, after which the model injected a placeholder circle to satisfy the check (the stray sketch users saw instead of one on the selected face). The validator now skips the null-shape report for object types whose empty shape is valid (`Sketcher::SketchObject`, `PartDesign::Body`); the separate Invalid-state check still catches a sketch whose attachment genuinely fails. ([issue #18](https://github.com/ghbalf/freecad-ai/issues/18); thanks @0xrushi)
+- **Headless view-framing calls failed the pre-check** (`freecad_ai/core/executor.py`). LLM-generated code routinely ends with view cosmetics — `Gui.ActiveDocument.ActiveView.viewIsometric()`, `fitAll()`, `SendMsgToActiveView("ViewFit")`. Headlessly `FreeCADGui` has no `ActiveDocument`, so these raised `AttributeError: module 'FreeCADGui' has no attribute 'ActiveDocument'` and the sandbox rejected otherwise-valid geometry — e.g. "generate a cube", which surfaced once the v0.16.2-alpha hang fix removed the timeout that had been masking it. The sandbox harness now stubs the whole `Gui.ActiveDocument.*` surface with a recursive no-op, so view chains are harmless while the geometry is still validated. ([issue #14](https://github.com/ghbalf/freecad-ai/issues/14); thanks @JohnMcLear)
+
+### Tests
+
+- Integration: `tests/integration/test_sandbox_validation.py::TestEmptySketchNullShapeNotReported` (empty sketch on a real face, and empty body, pass) and `::TestHeadlessGuiCallsAreStubbed` (verbatim "generate a cube" with view framing passes). Unit: `tests/unit/test_executor.py::TestCollectObjectIssues` gains empty-sketch/empty-body exemption and the matching safety-net cases. Existing bad-attachment and newly-invalid negative controls remain green.
+
 ## [0.16.2-alpha] - 2026-06-06
 
 A bug-fix patch for [issue #14](https://github.com/ghbalf/freecad-ai/issues/14): the headless sandbox pre-check could time out on *any* operation — even a trivial one — whenever a saved document was open, making Act mode unusable on affected setups. This supersedes the v0.16.1-alpha timeout change, which addressed the wrong cause.

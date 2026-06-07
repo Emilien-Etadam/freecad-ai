@@ -180,9 +180,22 @@ try:
 
     try:
         import FreeCADGui as Gui
-        # Console mode: Gui module exists but has no active view.
-        # Stub methods that LLM code commonly calls so they become no-ops.
+        # Console mode: Gui module exists but has no active document/view.
+        # LLM-generated code routinely ends with view-framing cosmetics
+        # (Gui.ActiveDocument.ActiveView.viewIsometric(), fitAll(),
+        # SendMsgToActiveView("ViewFit")). Headlessly FreeCADGui has no
+        # ActiveDocument, so these raise AttributeError and fail the pre-check
+        # for geometry that runs fine in the user's real GUI. Neutralize the
+        # whole Gui.ActiveDocument.* surface with a recursive no-op — any
+        # attribute access or call returns the same stub, so arbitrary view
+        # chains become harmless while the geometry is still validated (#14).
         if not hasattr(Gui, "ActiveDocument") or Gui.ActiveDocument is None:
+            class _NoOpGui:
+                def __getattr__(self, _name):
+                    return self
+                def __call__(self, *a, **kw):
+                    return self
+            Gui.ActiveDocument = _NoOpGui()
             Gui.SendMsgToActiveView = lambda *a, **kw: None
             Gui.updateGui = lambda *a, **kw: None
     except ImportError:

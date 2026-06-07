@@ -169,6 +169,39 @@ class TestEmptySketchNullShapeNotReported:
         assert ok is True, "an empty body must pass the sandbox; got err=" + err
 
 
+class TestHeadlessGuiCallsAreStubbed:
+    """Regression for issue #14 (follow-up): LLM-generated code routinely ends
+    with view-framing boilerplate — Gui.ActiveDocument.ActiveView.viewIsometric(),
+    fitAll(), SendMsgToActiveView("ViewFit"). In the headless sandbox FreeCADGui
+    has no ActiveDocument / ActiveView, so these raise AttributeError and the
+    pre-check rejects otherwise-valid geometry that runs fine in the user's real
+    GUI. @JohnMcLear's "generate a cube" failed this way across three releases.
+    The harness stubs these GUI-only calls to no-ops so validation sees the
+    geometry, not the cosmetics.
+    """
+
+    def test_generate_a_cube_with_view_framing_passes(self, freecad_available):
+        # Verbatim shape of @JohnMcLear's reported code (#14).
+        code = (
+            "import FreeCAD as App\n"
+            "import Part\n"
+            "doc = App.ActiveDocument\n"
+            "cube = doc.addObject('Part::Box', 'Cube')\n"
+            "cube.Length = 50.0\n"
+            "cube.Width = 50.0\n"
+            "cube.Height = 50.0\n"
+            "doc.recompute()\n"
+            "import FreeCADGui as Gui\n"
+            "Gui.ActiveDocument.ActiveView.viewIsometric()\n"
+            "Gui.SendMsgToActiveView('ViewFit')\n"
+        )
+        ok, err = _sandbox_test(code, timeout=60)
+        assert ok is True, (
+            "valid geometry followed by headless-only GUI view calls must pass "
+            "the sandbox; got err=" + err
+        )
+
+
 @pytest.fixture
 def simple_saved_doc(freecad_available):
     """Path to a trivial saved .FCStd (one box) — exercises the openDocument
