@@ -420,3 +420,53 @@ class TestCollectObjectIssues:
         ]
         issues = executor._collect_object_issues(objects_state, set())
         assert issues == []
+
+    def test_empty_sketch_null_shape_is_not_reported(self):
+        # Issue #18 follow-up: "create a sketch on the selected face" makes an
+        # empty sketch (geometry is added later in the editor). On FreeCAD 1.1
+        # an empty Sketcher::SketchObject reports Shape.isNull() == True while
+        # State stays "Up-to-date" — a valid, complete intermediate state. The
+        # validator must not flag it; otherwise the model injects junk
+        # placeholder geometry to defeat the false positive.
+        objects_state = [
+            {"name": "Sketch_Face1996", "type": "Sketcher::SketchObject",
+             "null": True, "invalid": False, "invalid_state": False},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == [], (
+            "an empty but valid sketch (null shape, Up-to-date) must not be "
+            "reported as broken"
+        )
+
+    def test_empty_body_null_shape_is_not_reported(self):
+        # A PartDesign::Body before its first feature also has a null shape
+        # while Up-to-date — same benign null as an empty sketch.
+        objects_state = [
+            {"name": "Body", "type": "PartDesign::Body",
+             "null": True, "invalid": False, "invalid_state": False},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == []
+
+    def test_failed_sketch_attachment_still_reported(self):
+        # Safety net: a sketch whose attachment did not resolve lands in an
+        # Invalid state (null shape AND invalid_state). The null-shape
+        # exemption for sketches must NOT swallow this — the separate
+        # invalid_state report still catches the genuine failure.
+        objects_state = [
+            {"name": "Sketch", "type": "Sketcher::SketchObject",
+             "null": True, "invalid": False, "invalid_state": True},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == ["Object 'Sketch' is in Invalid state"]
+
+    def test_null_shape_on_non_exempt_new_object_still_reported(self):
+        # A solid-producing feature (e.g. a Pad) that silently builds nothing
+        # is a real defect and must still be reported — the exemption is
+        # narrow, keyed on object type.
+        objects_state = [
+            {"name": "Pad", "type": "PartDesign::Pad",
+             "null": True, "invalid": False, "invalid_state": False},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == ["Object 'Pad' has null shape"]

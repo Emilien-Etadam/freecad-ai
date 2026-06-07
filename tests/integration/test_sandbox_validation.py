@@ -129,6 +129,46 @@ class TestSandboxIgnoresPreexistingInvalidity:
         assert "invalid shape" in err, "failure must name the invalid shape"
 
 
+class TestEmptySketchNullShapeNotReported:
+    """Regression for issue #18 follow-up: "create a sketch on the selected
+    face" produces an EMPTY sketch (geometry is drawn later in the editor).
+    On FreeCAD 1.1 an empty Sketcher::SketchObject has Shape.isNull() == True
+    while its State stays "Up-to-date" — a valid intermediate state, not a
+    defect. The post-execution validator reported it as "has null shape",
+    failing the exact "sketch on a selected face" workflow #20 was meant to
+    enable; the model then injected a junk placeholder circle to defeat the
+    check, which is what the user saw ("a random circular sketch somewhere
+    instead of the selected rectangular face").
+    """
+
+    def test_empty_sketch_on_valid_face_passes(self, freecad_available):
+        # Mirror the user's case: an empty sketch attached to a real planar
+        # face of an imported-like solid. The attachment is valid, so the only
+        # thing that can fail is the empty sketch's (benign) null shape.
+        code = (
+            "import Part\n"
+            "f = doc.addObject('Part::Feature', 'ImportedSolid')\n"
+            "f.Shape = Part.makeBox(40, 40, 40)\n"
+            "doc.recompute()\n"
+            "sk = doc.addObject('Sketcher::SketchObject', 'Sketch_Face1')\n"
+            "sk.AttachmentSupport = [(f, 'Face1')]\n"
+            "sk.MapMode = 'FlatFace'\n"
+            "doc.recompute()\n"
+        )
+        ok, err = _sandbox_test(code, timeout=60)
+        assert ok is True, (
+            "an empty sketch validly attached to a face must pass the sandbox; "
+            "got err=" + err
+        )
+
+    def test_empty_body_passes(self, freecad_available):
+        # A PartDesign::Body before its first feature also has a benign null
+        # shape while Up-to-date.
+        code = "doc.addObject('PartDesign::Body', 'Body')\n"
+        ok, err = _sandbox_test(code, timeout=60)
+        assert ok is True, "an empty body must pass the sandbox; got err=" + err
+
+
 @pytest.fixture
 def simple_saved_doc(freecad_available):
     """Path to a trivial saved .FCStd (one box) — exercises the openDocument
