@@ -96,13 +96,26 @@ def _collect_object_issues(objects_state, baseline_bad):
     newly broke are reported. The shape source of truth lives here so the
     subprocess harness and the unit tests exercise identical logic.
     """
+    # Object types whose Shape is legitimately null in a valid, complete state.
+    # An empty sketch ("create a sketch on the selected face" — geometry is
+    # drawn later in the editor) and an empty body (a container before its
+    # first feature) both report Shape.isNull() == True while State stays
+    # "Up-to-date". Flagging their null shape produced a false positive that
+    # failed the sketch-on-a-face workflow; the model then injected junk
+    # placeholder geometry to defeat the check (issue #18). A genuinely failed
+    # object of these types (e.g. a sketch whose attachment didn't resolve)
+    # still lands in an Invalid state and is caught by the invalid_state report
+    # below. Kept local so it ships with the function source into the sandbox
+    # harness (inspect.getsource doesn't carry module globals).
+    null_shape_ok_types = {"Sketcher::SketchObject", "PartDesign::Body"}
     issues = []
     for st in objects_state:
         name = st["name"]
         if name in baseline_bad:
             continue
         if st.get("null"):
-            issues.append("Object '" + name + "' has null shape")
+            if st.get("type") not in null_shape_ok_types:
+                issues.append("Object '" + name + "' has null shape")
         elif st.get("invalid"):
             issues.append("Object '" + name + "' has invalid shape")
         if st.get("invalid_state"):
@@ -190,8 +203,8 @@ try:
                 pass
         _state = getattr(_obj, "State", None)
         _bad_state = bool(_state and "Invalid" in _state)
-        return {{"name": _obj.Name, "null": _null,
-                 "invalid": _invalid, "invalid_state": _bad_state}}
+        return {{"name": _obj.Name, "type": getattr(_obj, "TypeId", ""),
+                 "null": _null, "invalid": _invalid, "invalid_state": _bad_state}}
 
     # Baseline: objects already broken in the opened document BEFORE user code
     # runs. The sandbox dry-runs against a copy of the saved document, so an
