@@ -12,4 +12,14 @@ class TestSystemPromptTools:
 
     def test_act_tools_prompt_honors_explicit_tool_request(self):
         prompt = get_default_system_prompt(mode="act", tools_enabled=True)
-        assert "names a tool" in prompt or "names a tool" in prompt.lower() or "create_primitive" in prompt
+        assert "names a tool" in prompt or "create_primitive" in prompt
+
+    def test_act_tools_prompt_requires_tool_calls_for_modeling(self):
+        prompt = get_default_system_prompt(mode="act", tools_enabled=True)
+        assert "MUST include tool calls" in prompt
+        assert "modélise" in prompt
+
+    def test_act_tools_prompt_includes_dice_pattern(self):
+        prompt = get_default_system_prompt(mode="act", tools_enabled=True)
+        assert "dé à jouer" in prompt or "Playing die" in prompt
+        assert "fillet_edges" in prompt

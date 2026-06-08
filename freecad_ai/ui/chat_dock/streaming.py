@@ -164,14 +164,22 @@ class ChatDockStreamingMixin:
             if code_blocks and mode == "act":
                 self._handle_act_mode(code_blocks)
             elif mode == "act" and full_response.strip():
-                self._append_html(self._render_message(
-                    "system",
-                    translate(
+                tools_were_offered = bool(
+                    self._worker and getattr(self._worker, "tools", None)
+                )
+                if tools_were_offered:
+                    hint = translate(
+                        "ChatDockWidget",
+                        "Act mode: the model responded without calling any tools. "
+                        "Try again or rephrase your request.",
+                    )
+                else:
+                    hint = translate(
                         "ChatDockWidget",
                         "Act mode: no Python code block found to run. "
                         "Use a ```python fenced block or enable tool calling in Settings.",
-                    ),
-                ))
+                    )
+                self._append_html(self._render_message("system", hint))
 
         # After-changes viewport capture: queue screenshot for next message
         capture_mode = self._capture_mode_override or get_config().viewport_capture

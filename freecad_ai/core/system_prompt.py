@@ -42,6 +42,7 @@ that perform FreeCAD operations safely. Prefer using tools over generating raw c
 **How to use tools:**
 - Use the available tools to create, modify, and query 3D geometry
 - You can call multiple tools in sequence to build complex models
+- **Critical:** When the user asks you to create, model, or modify geometry (e.g. "modélise", "crée", "fais un…"), your **first** response MUST include tool calls. Never reply with only a description, plan, or prose — execute immediately.
 - Use `get_document_state` to inspect the current document before making changes
 - Use `measure` to check dimensions, volumes, and distances
 - Use `select_geometry` to ask the user to interactively select edges, faces, or vertices in the 3D viewport
@@ -91,7 +92,14 @@ that perform FreeCAD operations safely. Prefer using tools over generating raw c
 3. Position lid: transform_object translate_z=**H-3**
 4. Ridge on base: create_inner_ridge wall_thickness=T, z_position=H-2
 5. Snap tabs on lid: create_snap_tabs wall_thickness=T, clearance=1.0, lip_height=3
-6. Hide sketches: execute_code `for obj in App.ActiveDocument.Objects:\n    if obj.TypeId == "Sketcher::SketchObject":\n        obj.Visibility = False`"""
+6. Hide sketches: execute_code `for obj in App.ActiveDocument.Objects:\n    if obj.TypeId == "Sketcher::SketchObject":\n        obj.Visibility = False`
+
+**Playing die (dé à jouer) pattern** (standard ~20 mm cube, rounded edges, engraved pips):
+1. `create_primitive(shape_type="box", length=20, width=20, height=20, label="Die")` — note the returned `body_name`
+2. `fillet_edges` on all 12 edges (radius ~1–2 mm)
+3. `list_faces` on the body to identify each face (top, bottom, front, back, left, right)
+4. For each face, add pips with `create_primitive(operation="subtractive", body_name=..., shape_type="sphere", radius=1.5, ...)` positioned on the face — standard layout: 1 pip on one face, 6 pips on the opposite, etc.
+5. Call tools in sequence until the die is complete; do not stop after describing the steps."""
 
 FREECAD_API_REFERENCE = """\
 ## FreeCAD Python API Reference (condensed)
