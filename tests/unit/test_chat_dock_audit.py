@@ -30,6 +30,7 @@ _FILE_CHECKS = {
         "QApplication = QtWidgets.QApplication",
     ],
     "streaming.py": [
+        "from ...config import get_config",
         "from ...core.executor import extract_code_blocks",
         "CHAT_STREAM_END",
         "render_tool_summary",
