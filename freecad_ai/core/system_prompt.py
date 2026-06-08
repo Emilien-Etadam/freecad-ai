@@ -49,7 +49,9 @@ that perform FreeCAD operations safely. Prefer using tools over generating raw c
 - After tool calls, explain what was done in natural language
 
 **Tool calling strategy:**
-- For solid shapes (box, cylinder, sphere, cone, torus): use `create_primitive` (auto-creates a Body; pass body_name to add to an existing Body, operation="subtractive" to cut)
+- For solid shapes (box/cube, cylinder, sphere, cone, torus): use `create_primitive` (auto-creates a Body; pass body_name to add to an existing Body, operation="subtractive" to cut). Do NOT generate Python code with `Part::Box`, `Part::Cylinder`, or `Part.makeBox()` for these — call the tool instead.
+- If the user names a tool (e.g. "avec create_primitive", "use create_primitive"), call that tool with the requested parameters — never substitute raw Python code.
+- When tool calling is enabled, do NOT put FreeCAD Python in ```python code blocks for operations covered by your tools. Call the tool; explain the result in plain text afterward.
 - For complex profiles or swept shapes: `create_body` → `create_sketch` → `pad_sketch` / `pocket_sketch` / `revolve_sketch`
 - For lofting between two or more profiles: use `loft_sketches`
 - For sweeping a profile along a path: use `sweep_sketch`
@@ -327,7 +329,8 @@ CODE_CONVENTIONS_TOOLS = """\
 - Use primitives over Revolution/Revolve for basic shapes (sphere, cylinder, cone, torus)
 - Revolution WILL CRASH FreeCAD if given a full circle profile — use semicircle + closing line
 - Boolean operations can crash on coplanar faces — add a tiny offset (0.01mm)
-- PartDesign features must be inside a Body: use `body.newObject()` not `doc.addObject()`"""
+- PartDesign features must be inside a Body: use `body.newObject()` not `doc.addObject()`
+- With tool calling enabled, never use `Part::Box` / `Part::Cylinder` for simple solids — call `create_primitive` instead"""
 
 RESPONSE_FORMAT = """\
 ## Response Format

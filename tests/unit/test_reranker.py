@@ -16,6 +16,7 @@ from freecad_ai.tools.reranker import (
     _tokenize,
     _expand_snake_case,
     _parse_rerank_response,
+    _explicit_tool_mentions,
 )
 
 
@@ -156,6 +157,43 @@ class TestReranker:
         a = rerank_tools(SAMPLE_TOOLS, "create sketch geometry", top_n=5)
         b = rerank_tools(SAMPLE_TOOLS, "create sketch geometry", top_n=5)
         assert a == b
+
+    def test_explicit_tool_name_is_pinned(self):
+        """User naming a tool (e.g. create_primitive) must always include it."""
+        result = rerank_tools(
+            SAMPLE_TOOLS,
+            "Crée un cube 10 mm avec create_primitive",
+            top_n=2,
+        )
+        assert "create_primitive" in result
+        assert result[0] == "create_primitive"
+
+    def test_explicit_tool_name_with_config_pinned(self):
+        result = rerank_tools(
+            SAMPLE_TOOLS,
+            "use create_primitive for a box",
+            top_n=2,
+            pinned=["list_objects"],
+        )
+        assert result[0] == "create_primitive"
+        assert "list_objects" in result
+
+
+class TestExplicitToolMentions:
+    def test_finds_snake_case_name(self):
+        names = {"create_primitive", "pad_sketch"}
+        assert _explicit_tool_mentions(
+            "Crée un cube avec create_primitive", names
+        ) == ["create_primitive"]
+
+    def test_ignores_unknown_names(self):
+        assert _explicit_tool_mentions("use foo_bar", {"create_primitive"}) == []
+
+    def test_longer_name_matched_first(self):
+        names = {"create", "create_primitive"}
+        assert _explicit_tool_mentions("call create_primitive", names) == [
+            "create_primitive"
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -414,6 +452,17 @@ class TestRerankToolsLLM:
         )
         assert result == ["list_objects"]
         assert client.calls == []  # short-circuit, no LLM call
+
+    def test_explicit_tool_name_pinned_in_llm_reranker(self):
+        client = _FakeClient(response='["create_sketch"]')
+        result = rerank_tools_llm(
+            SAMPLE_TOOLS,
+            "Crée un cube 10 mm avec create_primitive",
+            top_n=2,
+            llm_client=client,
+        )
+        assert result[0] == "create_primitive"
+        assert "create_primitive" in result
 
     def test_hallucinated_names_filtered_then_topped_up(self):
         # LLM invents two names, names one real one. Top-up fills the gap.
