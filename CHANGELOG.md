@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- **Act mode showed a misleading error when tools were enabled but the LLM replied with text only** (`freecad_ai/ui/chat_dock/streaming.py`). The message now distinguishes « no tools called » (tools active) from « no code block » (tools disabled). The system prompt also requires the model to call tools immediately on modeling requests and adds a playing-die (dé à jouer) construction pattern.
+- **Send appeared to do nothing after clicking the button** (`freecad_ai/ui/chat_dock/send.py`). MCP connection and LLM tool reranking ran on the main thread *before* the loading indicator appeared, freezing the UI for up to two minutes with no feedback. Loading/stream UI now shows immediately; setup errors are surfaced in chat and the Report View. The reranker LLM client uses a 30 s HTTP timeout so a dead provider falls back to keyword reranking quickly.
 
 A feature release adding a datum-geometry and transform/duplicate toolset — sketching on faces and named planes, parametric datum planes and lines, relative transforms, and independent parametric copies — together with a sandbox fix that unblocks editing imported (mesh→solid) parts. This work grew out of [issue #18](https://github.com/ghbalf/freecad-ai/issues/18) (reported by 0xrushi): a snap-fit workflow on an imported solid that fell out of the parametric toolchain.
 

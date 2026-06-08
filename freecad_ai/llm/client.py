@@ -137,7 +137,8 @@ class LLMClient:
 
     def __init__(self, provider_name: str, base_url: str, api_key: str,
                  model: str, max_tokens: int = 4096, temperature: float = 0.3,
-                 thinking: str = "off", model_params: dict | None = None):
+                 thinking: str = "off", model_params: dict | None = None,
+                 http_timeout: float | None = None):
         self.provider_name = provider_name
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -146,6 +147,7 @@ class LLMClient:
         self.temperature = temperature
         self.thinking = thinking  # "off", "on", "extended"
         self.model_params = model_params or {}  # freeform per-model params
+        self.http_timeout = http_timeout
         self.api_style = get_api_style(provider_name)
 
         # SSL context for HTTPS requests.
@@ -751,11 +753,16 @@ class LLMClient:
                 pass
         return self._BASE_BACKOFF * (2 ** attempt) + random.uniform(0, 1)
 
+    def _request_timeout(self) -> float:
+        if self.http_timeout is not None:
+            return self.http_timeout
+        return 300 if self.provider_name == "ollama" else 120
+
     def _http_post(self, url: str, headers: dict, body: dict) -> dict:
         """Make an HTTP POST request with retry on 429. Returns parsed JSON."""
         self._check_ssl(url)
         payload = json.dumps(body).encode("utf-8")
-        timeout = 300 if self.provider_name == "ollama" else 120
+        timeout = self._request_timeout()
         ctx = self._ssl_ctx if url.startswith("https") else None
 
         for attempt in range(self._MAX_RETRIES + 1):
@@ -785,7 +792,7 @@ class LLMClient:
         """Make a streaming HTTP POST with retry on 429. Yields parsed SSE data chunks."""
         self._check_ssl(url)
         payload = json.dumps(body).encode("utf-8")
-        timeout = 300 if self.provider_name == "ollama" else 120
+        timeout = self._request_timeout()
         ctx = self._ssl_ctx if url.startswith("https") else None
 
         resp = None

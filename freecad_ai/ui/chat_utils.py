@@ -50,6 +50,7 @@ def _build_rerank_llm_client(cfg):
         temperature=model_params.get("temperature", 0.0),
         thinking="off",
         model_params=model_params,
+        http_timeout=30,
     )
 
 

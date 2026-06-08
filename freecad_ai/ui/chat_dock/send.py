@@ -174,6 +174,41 @@ class ChatDockSendMixin:
 
     def _continue_send(self):
         """Continue the send flow after optional compaction."""
+        # Show loading immediately — MCP connect and LLM reranking can block
+        # the main thread for several seconds; without this the UI looks frozen
+        # after the user message appears.
+        self._set_loading(True)
+        self._streaming_html = ""
+        self._in_thinking = False
+        self._tool_results_stored = False
+        self._summary_rendered = False
+        cfg = get_config()
+        hint_kind = "thinking" if cfg.thinking != "off" else "connecting"
+        self._append_html(render_assistant_stream_open(palette=self.palette()))
+        self._append_html(render_stream_activity_hint(self.palette(), hint_kind))
+        self._set_chat_activity(
+            "think" if cfg.thinking != "off" else "connect",
+        )
+
+        try:
+            self._continue_send_impl()
+        except Exception as e:
+            self._set_loading(False)
+            err = str(e) or type(e).__name__
+            self._append_html(self._render_message(
+                "system",
+                translate("ChatDockWidget", "Error: ") + err,
+            ))
+            try:
+                import FreeCAD as _App
+                _App.Console.PrintError(
+                    "[FreeCAD AI] Send failed: {}\n".format(err)
+                )
+            except Exception:
+                pass
+
+    def _continue_send_impl(self):
+        """Build prompts/tools and start the LLM worker."""
         from ...core.system_prompt import build_system_prompt
         mode = "plan" if self.mode_combo.currentIndex() == 0 else "act"
         cfg = get_config()
@@ -290,19 +325,6 @@ class ChatDockSendMixin:
         messages = self.conversation.get_messages_for_api(
             api_style=api_style, strip_thinking=strip)
 
-        # Start streaming
-        self._set_loading(True)
-        self._streaming_html = ""
-        self._append_html(render_assistant_stream_open(palette=self.palette()))
-        hint_kind = "thinking" if cfg.thinking != "off" else "connecting"
-        self._append_html(render_stream_activity_hint(self.palette(), hint_kind))
-        self._set_chat_activity(
-            "think" if cfg.thinking != "off" else "connect",
-        )
-
-        self._in_thinking = False
-        self._tool_results_stored = False
-        self._summary_rendered = False
         self._worker = _LLMWorker(
             messages, system_prompt,
             tools=tools_schema, registry=self._tool_registry,

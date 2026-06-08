@@ -41,6 +41,7 @@ _FILE_CHECKS = {
         "render_assistant_stream_open",
         "from ...hooks import fire_hook",
         "from ...core.system_prompt import build_system_prompt",
+        "def _continue_send_impl",
     ],
     "code.py": [
         "from ...core.executor import extract_code_blocks, execute_code",
