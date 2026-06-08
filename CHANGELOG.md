@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.16.0-alpha] - 2026-06-03
+### Fixed
+
+- **LLM generated `Part::Box` code instead of calling `create_primitive`** when the user explicitly asked for the tool (e.g. « Crée un cube 10 mm avec create_primitive »). The Act-mode system prompt now forbids raw `Part::Box` / `Part.makeBox()` for simple solids when tool calling is enabled and instructs the model to honor explicit tool names. The tool reranker also auto-pins any tool name mentioned verbatim in the user message so it is never filtered out.
 
 A feature release adding a datum-geometry and transform/duplicate toolset — sketching on faces and named planes, parametric datum planes and lines, relative transforms, and independent parametric copies — together with a sandbox fix that unblocks editing imported (mesh→solid) parts. This work grew out of [issue #18](https://github.com/ghbalf/freecad-ai/issues/18) (reported by 0xrushi): a snap-fit workflow on an imported solid that fell out of the parametric toolchain.
 

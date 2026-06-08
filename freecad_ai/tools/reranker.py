@@ -91,6 +91,36 @@ def _score(
     return sum(idf.get(tok, 1.0) for tok in set(query_tokens) if tok in doc_set)
 
 
+def _explicit_tool_mentions(
+    user_message: str, tool_names: set[str]
+) -> list[str]:
+    """Return tool names the user explicitly referenced in their message.
+
+    Matches exact tool names as whole tokens (e.g. ``create_primitive`` in
+    "avec create_primitive", but not ``create`` inside ``create_primitive``).
+    Preserves the order of first appearance in ``user_message``.
+    """
+    if not user_message or not tool_names:
+        return []
+    text = user_message.lower()
+    found: list[tuple[int, str]] = []
+    for name in sorted(tool_names, key=len, reverse=True):
+        pattern = re.compile(
+            r"(?<![a-z0-9_])" + re.escape(name) + r"(?![a-z0-9_])"
+        )
+        match = pattern.search(text)
+        if match:
+            found.append((match.start(), name))
+    found.sort(key=lambda p: p[0])
+    seen: set[str] = set()
+    out: list[str] = []
+    for _, name in found:
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
 def rerank_tools(
     tools: list[tuple[str, str]],
     user_message: str,
@@ -103,13 +133,17 @@ def rerank_tools(
     ``user_message`` is the raw text of the message being reranked against.
     ``top_n`` is the maximum number of *non-pinned* tools to return.
     ``pinned`` are always included, regardless of score.
+    Tools explicitly named in ``user_message`` are also pinned automatically.
 
     If ``user_message`` is empty or no token matches exist, the top_n
     tools by lexical order (stable) are returned, to keep behavior
     predictable on edge cases.
     """
-    pinned_set = set(pinned or [])
-    pinned_present = [name for name, _ in tools if name in pinned_set]
+    all_names = {name for name, _ in tools}
+    explicit = _explicit_tool_mentions(user_message, all_names)
+    pinned_set = set(pinned or []) | set(explicit)
+    pinned_present = [name for name in explicit if name in all_names]
+    pinned_present += [name for name, _ in tools if name in pinned_set and name not in pinned_present]
 
     candidates = [(n, d) for n, d in tools if n not in pinned_set]
     if not candidates or top_n <= 0:
@@ -245,6 +279,9 @@ def rerank_tools_llm(
         return rerank_tools(tools, user_message, top_n, pinned)
 
     pinned_list = list(pinned or [])
+    valid_all = {n for n, _ in tools}
+    explicit = _explicit_tool_mentions(user_message, valid_all)
+    pinned_list = explicit + [n for n in pinned_list if n not in explicit]
     pinned_set = set(pinned_list)
     candidates = [(n, d) for n, d in tools if n not in pinned_set]
     pinned_present = [n for n, _ in tools if n in pinned_set]

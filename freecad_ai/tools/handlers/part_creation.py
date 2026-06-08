@@ -106,7 +106,7 @@ def _handle_create_primitive(
 
 CREATE_PRIMITIVE = ToolDefinition(
     name="create_primitive",
-    description="Create a PartDesign primitive (Box, Cylinder, Sphere, Cone, Torus) inside a Body. Auto-creates a Body if body_name is not given. Use operation='subtractive' to cut material from an existing body.",
+    description="Create a PartDesign primitive (box/cube, cylinder, sphere, cone, torus) inside a Body. Auto-creates a Body if body_name is not given. Use operation='subtractive' to cut material from an existing body.",
     category="modeling",
     parameters=[
         ToolParam("shape_type", "string", "Type of primitive to create",
