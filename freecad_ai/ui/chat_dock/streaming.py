@@ -3,6 +3,7 @@ import html as html_mod
 
 from ..compat import QtWidgets, QtCore, QtGui
 from ...i18n import translate
+from ...config import get_config
 from ..message_view import (
     CHAT_STREAM_END,
     render_message,
