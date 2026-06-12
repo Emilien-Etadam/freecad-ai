@@ -1,16 +1,24 @@
-"""STDIO transports for MCP communication.
+"""Transports for MCP communication.
 
 StdioClientTransport — manages a subprocess MCP server (client side).
 StdioServerTransport — reads stdin / writes stdout (server side).
+SSEServerTransport  — serves MCP over HTTP with Server-Sent Events.
 """
 
 import json
+import logging
 import subprocess
 import sys
 import threading
+import time
+import uuid
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from typing import Any, Callable
 
 from . import protocol
+
+logger = logging.getLogger(__name__)
 
 
 class StdioClientTransport:
@@ -190,3 +198,144 @@ class StdioServerTransport:
         data = json.dumps(msg, separators=(",", ":")) + "\n"
         sys.stdout.write(data)
         sys.stdout.flush()
+
+
+class SSEServerTransport:
+    """Server-side transport: serves MCP over HTTP + Server-Sent Events.
+
+    Endpoints:
+        GET  /sse       — SSE event stream (client subscribes here)
+        POST /messages  — JSON-RPC requests (responses arrive via SSE)
+
+    Designed for a single connected client at a time (typical for a
+    desktop-app MCP server like FreeCAD).
+    """
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 3000):
+        self._host = host
+        self._port = port
+        self._handler: Callable[[dict], dict | None] | None = None
+        self._sse_wfile = None
+        self._sse_lock = threading.Lock()
+
+    def run(self, handler: Callable[[dict], dict | None]):
+        """Start the HTTP server (blocking)."""
+        self._handler = handler
+        transport = self
+
+        class RequestHandler(BaseHTTPRequestHandler):
+            def log_message(self, fmt, *args):
+                logger.debug(fmt, *args)
+
+            def _base_path(self):
+                return self.path.split("?")[0].rstrip("/")
+
+            def do_GET(self):
+                if self._base_path() == "/sse":
+                    self._handle_sse()
+                else:
+                    self.send_error(404)
+
+            def do_POST(self):
+                if self._base_path() == "/messages":
+                    self._handle_messages()
+                else:
+                    self.send_error(404)
+
+            def _handle_sse(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+
+                session_id = uuid.uuid4().hex
+                with transport._sse_lock:
+                    transport._sse_wfile = self.wfile
+
+                try:
+                    endpoint_data = f"/messages?sessionId={session_id}"
+                    self.wfile.write(
+                        f"event: endpoint\ndata: {endpoint_data}\n\n".encode()
+                    )
+                    self.wfile.flush()
+
+                    while True:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        time.sleep(15)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+                finally:
+                    with transport._sse_lock:
+                        if transport._sse_wfile is self.wfile:
+                            transport._sse_wfile = None
+
+            def _handle_messages(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length).decode("utf-8")
+
+                try:
+                    msg = json.loads(body)
+                except json.JSONDecodeError:
+                    err = protocol.make_error(
+                        None, protocol.PARSE_ERROR, "Parse error"
+                    )
+                    self._send_json(400, err)
+                    return
+
+                try:
+                    response = transport._handler(msg) if transport._handler else None
+                except Exception as e:
+                    msg_id = msg.get("id")
+                    response = protocol.make_error(
+                        msg_id, protocol.INTERNAL_ERROR, str(e)
+                    ) if msg_id is not None else None
+
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(b'{"accepted":true}')
+                self.wfile.flush()
+
+                if response is not None:
+                    transport._send_sse(response)
+
+            def _send_json(self, code: int, msg: dict):
+                data = json.dumps(msg, separators=(",", ":")).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_OPTIONS(self):
+                self.send_response(204)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type")
+                self.end_headers()
+
+        class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+            daemon_threads = True
+
+        server = ThreadedHTTPServer((self._host, self._port), RequestHandler)
+        logger.info("MCP SSE server listening on http://%s:%d", self._host, self._port)
+        server.serve_forever()
+
+    def _send_sse(self, msg: dict):
+        """Send a JSON-RPC message to the connected SSE client."""
+        data = json.dumps(msg, separators=(",", ":"))
+        payload = f"event: message\ndata: {data}\n\n".encode()
+        with self._sse_lock:
+            wfile = self._sse_wfile
+        if wfile is None:
+            return
+        try:
+            wfile.write(payload)
+            wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            with self._sse_lock:
+                self._sse_wfile = None

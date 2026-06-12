@@ -1,7 +1,7 @@
 """MCP Server — exposes FreeCAD tools to external MCP clients.
 
-Runs over StdioServerTransport, handling initialize, tools/list,
-tools/call, and ping requests.
+Handles initialize, tools/list, tools/call, and ping requests over
+transport (STDIO or HTTP/SSE).
 """
 
 import logging
@@ -17,14 +17,16 @@ PROTOCOL_VERSION = "2025-03-26"
 
 
 class MCPServer:
-    """Exposes a ToolRegistry as an MCP server over STDIO."""
+    """Exposes a ToolRegistry as an MCP server."""
 
-    def __init__(self, registry: ToolRegistry):
+    def __init__(self, registry: ToolRegistry, transport=None, executor=None):
         self._registry = registry
+        self._transport = transport
+        self._executor = executor
 
     def run(self):
         """Start the server (blocking)."""
-        transport = StdioServerTransport()
+        transport = self._transport or StdioServerTransport()
         logger.info("MCP server starting with %d tools", len(self._registry.list_tools()))
         transport.run(self._handle)
 
@@ -68,7 +70,10 @@ class MCPServer:
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
 
-        result = self._registry.execute(tool_name, arguments)
+        if self._executor:
+            result = self._executor.execute(tool_name, arguments)
+        else:
+            result = self._registry.execute(tool_name, arguments)
 
         if result.success:
             content = [{"type": "text", "text": result.output}]
