@@ -215,7 +215,7 @@ class SSEServerTransport:
         self._host = host
         self._port = port
         self._handler: Callable[[dict], dict | None] | None = None
-        self._sse_wfile = None
+        self._sse_wfile: Any = None
         self._sse_lock = threading.Lock()
 
     def run(self, handler: Callable[[dict], dict | None]):
@@ -256,17 +256,13 @@ class SSEServerTransport:
 
                 try:
                     endpoint_data = f"/messages?sessionId={session_id}"
-                    self.wfile.write(
+                    endpoint_event = (
                         f"event: endpoint\ndata: {endpoint_data}\n\n".encode()
                     )
-                    self.wfile.flush()
-
-                    while True:
-                        self.wfile.write(b": keepalive\n\n")
-                        self.wfile.flush()
+                    if not transport._write_locked(endpoint_event):
+                        return
+                    while transport._write_locked(b": keepalive\n\n"):
                         time.sleep(15)
-                except (BrokenPipeError, ConnectionResetError, OSError):
-                    pass
                 finally:
                     with transport._sse_lock:
                         if transport._sse_wfile is self.wfile:
@@ -329,13 +325,25 @@ class SSEServerTransport:
         """Send a JSON-RPC message to the connected SSE client."""
         data = json.dumps(msg, separators=(",", ":"))
         payload = f"event: message\ndata: {data}\n\n".encode()
+        self._write_locked(payload)
+
+    def _write_locked(self, payload: bytes) -> bool:
+        """Write raw bytes to the SSE client, serialized by ``_sse_lock``.
+
+        The lock is held across the write *and* flush (not just the pointer
+        read), so the keepalive loop and tool responses — which run on
+        separate ThreadingMixIn request threads — cannot interleave bytes and
+        corrupt the event stream. Returns False if there is no connected
+        client or the connection has dropped (the client is then cleared).
+        """
         with self._sse_lock:
             wfile = self._sse_wfile
-        if wfile is None:
-            return
-        try:
-            wfile.write(payload)
-            wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, OSError):
-            with self._sse_lock:
+            if wfile is None:
+                return False
+            try:
+                wfile.write(payload)
+                wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
                 self._sse_wfile = None
+                return False

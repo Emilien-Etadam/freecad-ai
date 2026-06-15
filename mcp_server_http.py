@@ -32,9 +32,14 @@ import threading
 
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-if script_dir not in sys.path:
-    sys.path.insert(0, script_dir)
+# __file__ is undefined when this script is run via exec(open(...).read())
+# (a documented usage); guard so that path raises no NameError. In that mode
+# the freecad-ai package is already importable from FreeCAD's Mod directory.
+_script_path = globals().get("__file__")
+if _script_path:
+    script_dir = os.path.dirname(os.path.abspath(_script_path))
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
 
 import FreeCAD
 
