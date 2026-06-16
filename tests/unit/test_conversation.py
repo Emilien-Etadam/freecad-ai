@@ -566,3 +566,53 @@ class TestShouldStripThinking:
         from freecad_ai.llm.client import should_strip_thinking
         assert should_strip_thinking("") is False
         assert should_strip_thinking(None) is False
+
+
+class TestStripImagesForNonVisionModels:
+    """Issue #30: a non-vision model must not receive image blocks from history.
+
+    When the current model has no vision support and no describe_image
+    fallback is configured, image blocks in history must be replaced with a
+    text placeholder instead of being sent raw (which the provider rejects).
+    """
+
+    IMAGE = {"type": "image", "media_type": "image/png", "data": "aWdub3Jl"}
+
+    def _conv_with_image(self):
+        c = Conversation()
+        c.add_user_message("look at this", images=[self.IMAGE])
+        return c
+
+    def test_strip_images_removes_image_block_openai(self):
+        c = self._conv_with_image()
+        msgs = c.get_messages_for_api(api_style="openai", strip_images=True)
+        blocks = msgs[0]["content"]
+        assert all(b.get("type") != "image_url" for b in blocks)
+        assert any(b["type"] == "text" for b in blocks)
+
+    def test_strip_images_removes_image_block_anthropic(self):
+        c = self._conv_with_image()
+        msgs = c.get_messages_for_api(api_style="anthropic", strip_images=True)
+        blocks = msgs[0]["content"]
+        assert all(b.get("type") != "image" for b in blocks)
+
+    def test_strip_images_keeps_text(self):
+        c = self._conv_with_image()
+        msgs = c.get_messages_for_api(api_style="openai", strip_images=True)
+        text = " ".join(b.get("text", "") for b in msgs[0]["content"])
+        assert "look at this" in text
+
+    def test_default_keeps_images(self):
+        # Behavior preserved when strip_images is not requested.
+        c = self._conv_with_image()
+        msgs = c.get_messages_for_api(api_style="openai")
+        assert any(b.get("type") == "image_url" for b in msgs[0]["content"])
+
+    def test_describe_fn_takes_precedence_over_strip(self):
+        c = self._conv_with_image()
+        msgs = c.get_messages_for_api(
+            api_style="openai", strip_images=True,
+            describe_fn=lambda data_url: "a red cube",
+        )
+        text = " ".join(b.get("text", "") for b in msgs[0]["content"])
+        assert "a red cube" in text

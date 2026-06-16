@@ -94,6 +94,7 @@ class Conversation:
     def get_messages_for_api(self, max_chars: int = 100000,
                              api_style: str = "openai",
                              describe_fn=None,
+                             strip_images: bool = False,
                              strip_thinking: bool = False) -> list[dict]:
         """Get messages formatted for the LLM API.
 
@@ -102,6 +103,12 @@ class Conversation:
         Never splits a tool_call/tool_result pair during truncation.
 
         Args:
+            describe_fn: If given, image blocks in history are replaced with
+                text descriptions produced by this callable (vision fallback).
+            strip_images: If True (and no describe_fn), image blocks in history
+                are replaced with a text placeholder. Use for non-vision models
+                so a stale image from earlier in the conversation isn't sent to
+                a model that would reject it (issue #30).
             strip_thinking: If True, remove reasoning_content from assistant
                 messages in the history.  Required by models like Gemma that
                 reject thinking content in multi-turn conversations.
@@ -152,9 +159,12 @@ class Conversation:
         while result and result[0]["role"] not in ("user",):
             result.pop(0)
 
-        # Replace image blocks with text descriptions if describe_fn is provided
+        # Replace image blocks with text descriptions if describe_fn is
+        # provided, else drop them to a placeholder when strip_images is set.
         if describe_fn:
             result = self._replace_images_with_descriptions(result, describe_fn)
+        elif strip_images:
+            result = self._strip_images(result)
 
         # Convert to provider format
         if api_style == "anthropic":
@@ -289,6 +299,30 @@ class Conversation:
                             "type": "text",
                             "text": f"[Image: description unavailable — MCP error: {e}]",
                         })
+                else:
+                    new_blocks.append(block)
+            result.append({**msg, "content": new_blocks})
+        return result
+
+    @staticmethod
+    def _strip_images(messages: list[dict]) -> list[dict]:
+        """Replace image content blocks with a placeholder text block.
+
+        For models without vision support and no describe_image fallback, so
+        history images aren't sent raw to a provider that would reject them.
+        """
+        result = []
+        for msg in messages:
+            if not isinstance(msg.get("content"), list):
+                result.append(msg)
+                continue
+            new_blocks = []
+            for block in msg["content"]:
+                if block.get("type") == "image":
+                    new_blocks.append({
+                        "type": "text",
+                        "text": "[Image omitted — the current model has no vision support]",
+                    })
                 else:
                     new_blocks.append(block)
             result.append({**msg, "content": new_blocks})
