@@ -2002,8 +2002,13 @@ class ChatDockWidget(QDockWidget):
         from ..llm.client import should_strip_thinking
         strip = should_strip_thinking(
             cfg.provider.model, cfg.strip_thinking_history)
+        # When the model has no vision and no describe_image fallback is
+        # available, drop history image blocks to a placeholder so they aren't
+        # sent raw to a provider that would reject them (issue #30). When a
+        # describe_fn exists, the worker rebuilds messages with descriptions.
+        strip_images = not cfg.supports_vision and describe_fn is None
         messages = self.conversation.get_messages_for_api(
-            api_style=api_style, strip_thinking=strip)
+            api_style=api_style, strip_images=strip_images, strip_thinking=strip)
 
         # Start streaming
         self._set_loading(True)
@@ -2505,7 +2510,10 @@ class ChatDockWidget(QDockWidget):
         cfg = get_config()
         strip = should_strip_thinking(
             cfg.provider.model, cfg.strip_thinking_history)
-        messages = self.conversation.get_messages_for_api(strip_thinking=strip)
+        # This retry attached a viewport snapshot above; drop history images
+        # for non-vision models so they aren't sent raw (issue #30).
+        messages = self.conversation.get_messages_for_api(
+            strip_images=not cfg.supports_vision, strip_thinking=strip)
 
         self._set_loading(True)
         self._streaming_html = ""
