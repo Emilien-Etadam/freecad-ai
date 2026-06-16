@@ -9,6 +9,9 @@ Covers two issues found in code review:
 """
 
 import pathlib
+import threading
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -97,6 +100,82 @@ def test_write_locked_clears_client_on_broken_pipe():
 
     assert transport._write_locked(b"data") is False
     assert transport._sse_wfile is None
+
+
+# ---------------------------------------------------------------------------
+# Security — CORS / cross-origin tool invocation (drive-by RCE) guard
+# ---------------------------------------------------------------------------
+
+def test_request_allowed_for_loopback_native_client():
+    transport = SSEServerTransport()
+    # Native MCP clients connect over loopback and send no Origin header.
+    assert transport._request_allowed("127.0.0.1:3000", None) is True
+    assert transport._request_allowed("localhost:3000", None) is True
+
+
+def test_request_allowed_for_ipv6_loopback():
+    transport = SSEServerTransport()
+    assert transport._request_allowed("[::1]:3000", None) is True
+
+
+def test_request_rejected_for_cross_origin_browser_request():
+    transport = SSEServerTransport()
+    # A malicious web page's fetch() to localhost always carries an Origin.
+    assert transport._request_allowed("127.0.0.1:3000", "https://evil.example") is False
+
+
+def test_request_rejected_for_non_loopback_host_dns_rebinding():
+    transport = SSEServerTransport()
+    assert transport._request_allowed("evil.example", None) is False
+
+
+def test_request_rejected_for_missing_host():
+    transport = SSEServerTransport()
+    assert transport._request_allowed(None, None) is False
+    assert transport._request_allowed("", None) is False
+
+
+def test_request_allows_explicitly_configured_bind_host():
+    transport = SSEServerTransport(host="192.168.1.5")
+    assert transport._request_allowed("192.168.1.5:3000", None) is True
+
+
+def test_cross_origin_post_rejected_and_no_wildcard_cors_header():
+    transport = SSEServerTransport(host="127.0.0.1", port=0)
+    transport._handler = lambda msg: {
+        "jsonrpc": "2.0", "id": msg.get("id"), "result": {}
+    }
+    server = transport._make_server()
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # A cross-origin browser POST is rejected server-side.
+        cross = urllib.request.Request(
+            f"http://127.0.0.1:{port}/messages",
+            data=b'{"jsonrpc":"2.0","id":1,"method":"ping"}',
+            headers={"Content-Type": "application/json",
+                     "Origin": "https://evil.example"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(cross, timeout=5)
+        assert exc.value.code == 403
+
+        # A native client POST (no Origin) is accepted and exposes no
+        # permissive CORS header.
+        native = urllib.request.Request(
+            f"http://127.0.0.1:{port}/messages",
+            data=b'{"jsonrpc":"2.0","id":1,"method":"ping"}',
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urllib.request.urlopen(native, timeout=5)
+        assert resp.status == 202
+        assert resp.headers.get("Access-Control-Allow-Origin") is None
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 # ---------------------------------------------------------------------------

@@ -200,6 +200,9 @@ class StdioServerTransport:
         sys.stdout.flush()
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
 class SSEServerTransport:
     """Server-side transport: serves MCP over HTTP + Server-Sent Events.
 
@@ -209,18 +212,55 @@ class SSEServerTransport:
 
     Designed for a single connected client at a time (typical for a
     desktop-app MCP server like FreeCAD).
+
+    Because ``POST /messages`` executes arbitrary tools (including run_macro),
+    every request is gated: the ``Host`` header must be loopback (a
+    DNS-rebinding guard) and any cross-origin ``Origin`` is rejected. Native
+    MCP clients send no ``Origin``; a malicious web page's ``fetch()`` always
+    does, so this blocks browser drive-by tool invocation without breaking the
+    documented local client. ``allowed_hosts``/``allowed_origins`` widen the
+    policy for advanced (e.g. deliberately LAN-exposed) deployments.
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 3000):
+    def __init__(self, host: str = "127.0.0.1", port: int = 3000,
+                 allowed_hosts=None, allowed_origins=()):
         self._host = host
         self._port = port
         self._handler: Callable[[dict], dict | None] | None = None
         self._sse_wfile: Any = None
         self._sse_lock = threading.Lock()
+        if allowed_hosts is None:
+            allowed_hosts = _LOOPBACK_HOSTS | {host.lower()}
+        self._allowed_hosts = frozenset(h.lower() for h in allowed_hosts)
+        self._allowed_origins = frozenset(allowed_origins)
+
+    @staticmethod
+    def _hostname_of(host_header) -> str:
+        """Extract the bare hostname (no port) from a Host header value."""
+        if not host_header:
+            return ""
+        value = host_header.strip()
+        if value.startswith("["):  # IPv6 literal, e.g. [::1]:3000
+            return value[1:].split("]", 1)[0].lower()
+        return value.split(":", 1)[0].lower()
+
+    def _request_allowed(self, host_header, origin_header) -> bool:
+        """Authorize a request by its Host (DNS-rebinding) and Origin (CSRF)."""
+        if self._hostname_of(host_header) not in self._allowed_hosts:
+            return False
+        if origin_header is not None and origin_header not in self._allowed_origins:
+            return False
+        return True
 
     def run(self, handler: Callable[[dict], dict | None]):
         """Start the HTTP server (blocking)."""
         self._handler = handler
+        server = self._make_server()
+        logger.info("MCP SSE server listening on http://%s:%d", self._host, self._port)
+        server.serve_forever()
+
+    def _make_server(self):
+        """Build the threaded HTTP server (split out for testability)."""
         transport = self
 
         class RequestHandler(BaseHTTPRequestHandler):
@@ -230,13 +270,25 @@ class SSEServerTransport:
             def _base_path(self):
                 return self.path.split("?")[0].rstrip("/")
 
+            def _authorized(self):
+                if transport._request_allowed(
+                    self.headers.get("Host"), self.headers.get("Origin")
+                ):
+                    return True
+                self.send_error(403)
+                return False
+
             def do_GET(self):
+                if not self._authorized():
+                    return
                 if self._base_path() == "/sse":
                     self._handle_sse()
                 else:
                     self.send_error(404)
 
             def do_POST(self):
+                if not self._authorized():
+                    return
                 if self._base_path() == "/messages":
                     self._handle_messages()
                 else:
@@ -247,7 +299,6 @@ class SSEServerTransport:
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Connection", "keep-alive")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
 
                 session_id = uuid.uuid4().hex
@@ -291,7 +342,6 @@ class SSEServerTransport:
 
                 self.send_response(202)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(b'{"accepted":true}')
                 self.wfile.flush()
@@ -308,18 +358,16 @@ class SSEServerTransport:
                 self.wfile.write(data)
 
             def do_OPTIONS(self):
+                # No permissive CORS: a cross-origin preflight gets no
+                # Access-Control-Allow-Origin, so the browser blocks the
+                # follow-up request (do_POST also rejects it server-side).
                 self.send_response(204)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type")
                 self.end_headers()
 
         class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
             daemon_threads = True
 
-        server = ThreadedHTTPServer((self._host, self._port), RequestHandler)
-        logger.info("MCP SSE server listening on http://%s:%d", self._host, self._port)
-        server.serve_forever()
+        return ThreadedHTTPServer((self._host, self._port), RequestHandler)
 
     def _send_sse(self, msg: dict):
         """Send a JSON-RPC message to the connected SSE client."""
