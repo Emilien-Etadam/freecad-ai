@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.4-alpha] - 2026-06-16
+
+A bug-fix patch for the vision half of [issue #30](https://github.com/ghbalf/freecad-ai/issues/30) (@AVAVAVA1): a model without vision support errored out on every follow-up turn once an image was anywhere in the conversation history.
+
+### Fixed
+
+- **Images in history were sent to non-vision models** (`freecad_ai/core/conversation.py`, `freecad_ai/ui/chat_widget.py`). Once an image entered the conversation — a manual attachment, or a viewport snapshot the assistant attaches automatically — it stayed in the history and was re-sent on every later turn. With a text-only model selected (and no `describe_image` vision-fallback tool configured), the provider rejected the image block and the conversation stayed broken until it was cleared. `get_messages_for_api()` gains a `strip_images` option that replaces history image blocks with a `[Image omitted — the current model has no vision support]` placeholder; the chat send path, the auto-retry-on-error path (which attaches a viewport snapshot before resending), and the headless skill evaluator all apply it when the active model lacks vision and no describe-image fallback is available. When that fallback *is* configured, the existing describe-and-substitute behavior is unchanged. ([issue #30](https://github.com/ghbalf/freecad-ai/issues/30); thanks @AVAVAVA1)
+
+### Tests
+
+- Unit: `tests/unit/test_conversation.py::TestStripImagesForNonVisionModels` — image blocks are stripped to a placeholder for both OpenAI and Anthropic formats, surrounding text is preserved, images are kept when stripping isn't requested, a `describe_fn` still takes precedence, and a system message carrying a viewport snapshot (the retry path's shape) is covered.
+
 ## [0.16.3-alpha] - 2026-06-07
 
 A bug-fix patch for two headless-sandbox false positives: the pre-check rejected valid code that runs fine in the real FreeCAD GUI, blocking common workflows. Reported on [issue #18](https://github.com/ghbalf/freecad-ai/issues/18) (@0xrushi) and [issue #14](https://github.com/ghbalf/freecad-ai/issues/14) (@JohnMcLear).
