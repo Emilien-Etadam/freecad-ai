@@ -608,6 +608,15 @@ class TestStripImagesForNonVisionModels:
         msgs = c.get_messages_for_api(api_style="openai")
         assert any(b.get("type") == "image_url" for b in msgs[0]["content"])
 
+    def test_strip_images_on_system_message_with_viewport(self):
+        # The auto-retry-on-error path attaches a viewport snapshot via
+        # add_system_message(images=[...]); that image must also be stripped.
+        c = Conversation()
+        c.add_system_message("code failed", images=[self.IMAGE])
+        msgs = c.get_messages_for_api(api_style="openai", strip_images=True)
+        blocks = msgs[0]["content"]
+        assert all(b.get("type") != "image_url" for b in blocks)
+
     def test_describe_fn_takes_precedence_over_strip(self):
         c = self._conv_with_image()
         msgs = c.get_messages_for_api(

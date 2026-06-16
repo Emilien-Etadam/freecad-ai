@@ -2510,7 +2510,10 @@ class ChatDockWidget(QDockWidget):
         cfg = get_config()
         strip = should_strip_thinking(
             cfg.provider.model, cfg.strip_thinking_history)
-        messages = self.conversation.get_messages_for_api(strip_thinking=strip)
+        # This retry attached a viewport snapshot above; drop history images
+        # for non-vision models so they aren't sent raw (issue #30).
+        messages = self.conversation.get_messages_for_api(
+            strip_images=not cfg.supports_vision, strip_thinking=strip)
 
         self._set_loading(True)
         self._streaming_html = ""
