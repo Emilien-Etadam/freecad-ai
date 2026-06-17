@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.16.5-alpha] - 2026-06-17
+
 A bug-fix for the temperature-persistence half of [issue #30](https://github.com/ghbalf/freecad-ai/issues/30) (@AVAVAVA1): a per-model sampling parameter set in Settings reverted to its default after Save.
 
 ### Fixed
