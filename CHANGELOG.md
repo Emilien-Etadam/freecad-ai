@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+A bug-fix for the temperature-persistence half of [issue #30](https://github.com/ghbalf/freecad-ai/issues/30) (@AVAVAVA1): a per-model sampling parameter set in Settings reverted to its default after Save.
+
+### Fixed
+
+- **Reranker params could overwrite the main model's params on save** (`freecad_ai/config.py`, `freecad_ai/ui/settings_dialog.py`, `freecad_ai/ui/chat_widget.py`). The reranker stored its sampling parameters in the *shared* `model_params` dict, keyed by model name. When the reranker inherited the main model (override field empty — including whenever reranking is off), its "effective model" *was* the main model, so the Save handler wrote the reranker's table — a stale snapshot taken when the dialog opened, before any edit — into the main model's slot, clobbering the value the user had just changed (e.g. `temperature` reverting to `0.3`). The reranker now keeps its parameters in a dedicated `rerank_params` field that can never collide with `model_params`: in override mode the reranker reads/writes its own slot; in inherit mode it reads the main model's params and persists nothing of its own. Existing configs are migrated on load (the legacy reranker-override slot seeds `rerank_params` once). ([issue #30](https://github.com/ghbalf/freecad-ai/issues/30); thanks @AVAVAVA1) ([#32](https://github.com/ghbalf/freecad-ai/pull/32))
+
+### Tests
+
+- Unit: `tests/unit/test_reranker_namespace.py` — the runtime read path (`_build_rerank_llm_client`) sources params from `rerank_params` when overriding and from the main model when inheriting, and the persistence rule (`SettingsDialog._resolve_rerank_params`) writes the table only in override mode. `tests/unit/test_config.py` gains the `rerank_params` default/round-trip and the migration-seed cases (override seeds, inherit no-ops, idempotent when already present).
+
 ## [0.16.4-alpha] - 2026-06-16
 
 A bug-fix patch for the vision half of [issue #30](https://github.com/ghbalf/freecad-ai/issues/30) (@AVAVAVA1): a model without vision support errored out on every follow-up turn once an image was anywhere in the conversation history.
