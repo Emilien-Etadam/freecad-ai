@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.17.0-alpha] - 2026-06-22
+
+A feature release adding the first non-STDIO MCP transport: the bundled MCP server can now be reached over HTTP with Server-Sent Events, alongside the existing newline-delimited STDIO transport. Contributed by @Shuenhoy ([#29](https://github.com/ghbalf/freecad-ai/pull/29)).
+
+### Added
+
+- **HTTP/SSE MCP server transport** (`freecad_ai/mcp/transport.py`, `freecad_ai/mcp/server.py`, `mcp_server_http.py`). `SSEServerTransport` serves the same `ToolRegistry` over HTTP: clients open an SSE stream on `GET /sse` and post JSON-RPC requests to `POST /messages`, while STDIO remains the default. Still zero external dependencies — built on the standard library's `http.server`/`socketserver`. A new `mcp_server_http.py` entry point launches it from a FreeCAD AppImage. ([#29](https://github.com/ghbalf/freecad-ai/pull/29); thanks @Shuenhoy)
+
+### Security
+
+- **Cross-origin tool invocation is blocked on the HTTP/SSE server** (`freecad_ai/mcp/transport.py`). `POST /messages` executes arbitrary tools (including `run_macro`), and the initial implementation replied with `Access-Control-Allow-Origin: *` and a permissive preflight. Even bound to loopback, any web page the user had open could drive FreeCAD via a cross-origin `fetch()` — a drive-by RCE / DNS-rebinding vector. Every request is now gated: the `Host` header must be loopback and any cross-origin `Origin` is rejected with 403; the wildcard CORS headers are gone. Native MCP clients send no `Origin` and are unaffected; the `allowed_hosts`/`allowed_origins` constructor params can deliberately widen this for LAN exposure.
+
+### Fixed
+
+- **SSE socket writes are serialized** (`freecad_ai/mcp/transport.py`). Under `ThreadingMixIn`, the keepalive loop (GET `/sse` thread) and a tool response (POST `/messages` thread) could write to the same socket concurrently and interleave bytes, corrupting the event stream. All writes now go through a single lock-held `write`+`flush`.
+- **`__file__` guarded in the HTTP entry point** (`mcp_server_http.py`). The module referenced `__file__` at module scope, which raises `NameError` under the documented `exec(open(...).read())` launch mode; it now falls back via `globals().get("__file__")`.
+
+### Tests
+
+- Unit: `tests/unit/test_mcp_sse_transport.py` (13 tests) — covers the SSE/`/messages` round trip, write serialization under concurrency, the `__file__` exec-mode guard, and a live-server check that a cross-origin `POST` is rejected with 403 and carries no `Access-Control-Allow-Origin` header.
+
 ## [0.16.5-alpha] - 2026-06-17
 
 A bug-fix for the temperature-persistence half of [issue #30](https://github.com/ghbalf/freecad-ai/issues/30) (@AVAVAVA1): a per-model sampling parameter set in Settings reverted to its default after Save.

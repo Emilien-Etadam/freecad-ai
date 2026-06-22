@@ -1,3 +1,3 @@
 """FreeCAD AI — AI assistant workbench for FreeCAD."""
 
-__version__ = "0.16.5-alpha"
+__version__ = "0.17.0-alpha"
