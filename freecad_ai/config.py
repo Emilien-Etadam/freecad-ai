@@ -463,6 +463,10 @@ class AppConfig:
     # before the workbench activates, so our dock misses the restore and
     # lands at its default area every startup. We snapshot our own state
     # on dock-move events and reapply in get_chat_dock().
+    # When True, the chat dock is NOT hidden when switching away from the
+    # FreeCAD AI workbench — the panel stays open and usable in any other
+    # workbench. When False (default), leaving the workbench hides the dock.
+    keep_dock_on_workbench_switch: bool = False
     chat_dock_floating: bool = False
     chat_dock_area: str = "right"  # "left", "right", "top", "bottom"
     chat_dock_geometry: list = field(default_factory=list)  # [x, y, w, h] when floating

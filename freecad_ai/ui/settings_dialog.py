@@ -355,6 +355,16 @@ class SettingsDialog(QDialog):
         )
         behavior_layout.addWidget(self.auto_execute_check)
 
+        self.keep_dock_check = QCheckBox(
+            translate("SettingsDialog", "Keep chat panel open when switching workbenches")
+        )
+        self.keep_dock_check.setToolTip(translate(
+            "SettingsDialog",
+            "When enabled, the FreeCAD AI chat panel stays docked and usable "
+            "in other workbenches instead of hiding when you leave the "
+            "FreeCAD AI workbench."))
+        behavior_layout.addWidget(self.keep_dock_check)
+
         # Thinking mode
         thinking_layout = QHBoxLayout()
         thinking_layout.addWidget(QLabel(translate("SettingsDialog", "Thinking:")))
@@ -834,6 +844,7 @@ class SettingsDialog(QDialog):
 
         self.enable_tools_check.setChecked(cfg.enable_tools)
         self.auto_execute_check.setChecked(cfg.auto_execute)
+        self.keep_dock_check.setChecked(cfg.keep_dock_on_workbench_switch)
 
         # Tool reranking
         method_map = {"off": 0, "keyword": 1, "llm": 2}
@@ -1121,6 +1132,7 @@ class SettingsDialog(QDialog):
 
         cfg.enable_tools = self.enable_tools_check.isChecked()
         cfg.auto_execute = self.auto_execute_check.isChecked()
+        cfg.keep_dock_on_workbench_switch = self.keep_dock_check.isChecked()
 
         thinking_values = ["off", "on", "extended"]
         cfg.thinking = thinking_values[self.thinking_combo.currentIndex()]
