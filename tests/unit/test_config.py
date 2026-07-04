@@ -135,6 +135,25 @@ class TestAppConfig:
         assert c2.chat_dock_tabified_with == ["Tasks", "ModelView"]
         assert c2.chat_dock_mw_state == "aGVsbG8gd29ybGQ="
 
+    def test_keep_dock_on_workbench_switch_default(self):
+        """Opt-in feature (#34): the dock hides on workbench switch by default."""
+        assert AppConfig().keep_dock_on_workbench_switch is False
+
+    def test_keep_dock_on_workbench_switch_roundtrip(self):
+        """The keep-dock flag survives a JSON round-trip (#34/PR #35).
+
+        A brand-new defaulted bool needs no migration seeding: from_dict
+        falls back to the dataclass default when an older config JSON omits
+        the key, and preserves it when present.
+        """
+        c = AppConfig()
+        c.keep_dock_on_workbench_switch = True
+        c2 = AppConfig.from_dict(c.to_dict())
+        assert c2.keep_dock_on_workbench_switch is True
+        # An older config missing the key deserializes to the default.
+        legacy = AppConfig.from_dict({})
+        assert legacy.keep_dock_on_workbench_switch is False
+
     def test_rerank_params_default_empty(self):
         """The reranker has its own param namespace, empty by default."""
         c = AppConfig()

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.18.0-alpha] - 2026-07-04
+
+A small feature-and-fix release bundling two community contributions from
+@3dyuval with a tool-routing steering improvement.
+
+### Added
+
+- **Keep the chat panel open across workbench switches** (`InitGui.py`, `freecad_ai/config.py`, `freecad_ai/ui/settings_dialog.py`). A new opt-in `keep_dock_on_workbench_switch` setting (off by default) stops the FreeCAD AI dock from hiding when you leave the workbench, so the panel stays usable everywhere. Exposed both as a Settings checkbox and a keybindable "Keep Chat Panel Open" menu command. ([#34](https://github.com/ghbalf/freecad-ai/issues/34), [#35](https://github.com/ghbalf/freecad-ai/pull/35); thanks @3dyuval)
+
+### Fixed
+
+- **Custom OpenAI-compatible endpoints no longer 403 on a missing User-Agent** (`freecad_ai/llm/client.py`). `urllib` defaults to a `Python-urllib/x.y` User-Agent that some WAFs and reverse proxies in front of self-hosted gateways reject; requests now send an explicit `User-Agent: FreeCAD-AI`. Applied to both the OpenAI and Anthropic header builders. ([#33](https://github.com/ghbalf/freecad-ai/pull/33); thanks @3dyuval)
+
+### Changed
+
+- **Improved Act-mode steering toward `create_sketch` for face attachment** (`freecad_ai/core/system_prompt.py`, `freecad_ai/tools/freecad_tools.py`). When asked to "sketch on the selected face", the model was hand-rolling a raw `AttachmentSupport`/`MapMode` macro via `execute_code` instead of calling `create_sketch(support=…, face=…)` — which already handles attachment, planar-face validation, and offset. The Act-mode strategy now calls out the face-sketch route explicitly, `create_sketch`'s face capability is lifted to the front of its description, and `execute_code`/`run_macro` are framed as last resorts. Steering-only (prompt + tool descriptions); guarded by text-assertion regression tests. ([#28](https://github.com/ghbalf/freecad-ai/issues/28))
+
 ## [0.17.0-alpha] - 2026-06-22
 
 A feature release adding the first non-STDIO MCP transport: the bundled MCP server can now be reached over HTTP with Server-Sent Events, alongside the existing newline-delimited STDIO transport. Contributed by @Shuenhoy ([#29](https://github.com/ghbalf/freecad-ai/pull/29)).
