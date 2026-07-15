@@ -97,3 +97,21 @@ class TestResolveApiKey:
         client = _make_client(f"file:{token_file}")
         headers = client._openai_headers()
         assert headers["Authorization"] == "Bearer resolved-bearer-token"
+
+    def test_openai_headers_set_user_agent(self):
+        """OpenAI/custom requests send an explicit User-Agent (PR #33).
+
+        urllib otherwise defaults to ``Python-urllib/x.y``, which some WAFs
+        and proxies in front of self-hosted OpenAI-compatible endpoints
+        reject with a 403. An explicit UA avoids the denylisted default.
+        """
+        client = _make_client("sk-abc123")
+        assert client._openai_headers()["User-Agent"] == "FreeCAD-AI"
+
+    def test_anthropic_headers_set_user_agent(self):
+        """Anthropic requests send the same explicit User-Agent (PR #33
+        consistency): a proxied Anthropic-compatible endpoint has the same
+        denylisted-default gap as the OpenAI path.
+        """
+        client = _make_client("sk-abc123")
+        assert client._anthropic_headers()["User-Agent"] == "FreeCAD-AI"

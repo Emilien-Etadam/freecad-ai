@@ -98,6 +98,20 @@ class TestAppConfig:
         assert restored.temperature == 0.7
         assert restored.thinking == "on"
 
+    def test_execution_timeout_default(self):
+        # Issue #14: the execution timeout was hardcoded with no override. It is
+        # now a configurable field (kept at the long-standing 30s default; the
+        # real #14 fix was the sandbox no longer hanging — raising the budget
+        # only helps genuinely-slow ops on large models).
+        c = AppConfig()
+        assert c.execution_timeout == 30
+
+    def test_execution_timeout_roundtrip(self):
+        c = AppConfig()
+        c.execution_timeout = 180
+        c2 = AppConfig.from_dict(c.to_dict())
+        assert c2.execution_timeout == 180
+
     def test_chat_dock_state_defaults(self):
         c = AppConfig()
         assert c.chat_dock_floating is False
@@ -120,6 +134,43 @@ class TestAppConfig:
         assert c2.chat_dock_geometry == [100, 200, 400, 600]
         assert c2.chat_dock_tabified_with == ["Tasks", "ModelView"]
         assert c2.chat_dock_mw_state == "aGVsbG8gd29ybGQ="
+
+    def test_keep_dock_on_workbench_switch_default(self):
+        """Opt-in feature (#34): the dock hides on workbench switch by default."""
+        assert AppConfig().keep_dock_on_workbench_switch is False
+
+    def test_keep_dock_on_workbench_switch_roundtrip(self):
+        """The keep-dock flag survives a JSON round-trip (#34/PR #35).
+
+        A brand-new defaulted bool needs no migration seeding: from_dict
+        falls back to the dataclass default when an older config JSON omits
+        the key, and preserves it when present.
+        """
+        c = AppConfig()
+        c.keep_dock_on_workbench_switch = True
+        c2 = AppConfig.from_dict(c.to_dict())
+        assert c2.keep_dock_on_workbench_switch is True
+        # An older config missing the key deserializes to the default.
+        legacy = AppConfig.from_dict({})
+        assert legacy.keep_dock_on_workbench_switch is False
+
+    def test_rerank_params_default_empty(self):
+        """The reranker has its own param namespace, empty by default."""
+        c = AppConfig()
+        assert c.rerank_params == {}
+
+    def test_rerank_params_roundtrip(self):
+        """rerank_params survives a JSON round-trip independently of
+        model_params — it must never collide with the main model's slot
+        (issue #30: reranker save clobbered the main model's temperature)."""
+        c = AppConfig()
+        c.provider.model = "main-model"
+        c.model_params = {"main-model": {"temperature": 0.8}}
+        c.rerank_params = {"temperature": 0.0, "top_k": 20}
+        c2 = AppConfig.from_dict(c.to_dict())
+        assert c2.rerank_params == {"temperature": 0.0, "top_k": 20}
+        # The main model's params are untouched by the reranker namespace.
+        assert c2.model_params == {"main-model": {"temperature": 0.8}}
 
 
 class TestProviderPresets:
@@ -175,6 +226,51 @@ class TestSaveLoad:
         c = load_config()
         assert c.mode == "plan"
         assert c.provider.name == "anthropic"
+
+    def test_load_seeds_rerank_params_from_legacy_override_slot(self, tmp_config_dir):
+        """Migration: pre-namespace configs stored the reranker override
+        model's params inside the shared model_params dict. On load, seed the
+        new rerank_params namespace from that slot so override users don't
+        silently lose their reranker params (issue #30 follow-up)."""
+        import freecad_ai.config as config_mod
+        os.makedirs(os.path.dirname(config_mod.CONFIG_FILE), exist_ok=True)
+        with open(config_mod.CONFIG_FILE, "w") as f:
+            json.dump({
+                "provider": {"name": "ollama", "model": "main-model"},
+                "rerank_llm_model": "rr-model",
+                "model_params": {"rr-model": {"temperature": 0.0, "top_k": 20}},
+            }, f)
+        c = load_config()
+        assert c.rerank_params == {"temperature": 0.0, "top_k": 20}
+
+    def test_load_does_not_seed_rerank_params_in_inherit_mode(self, tmp_config_dir):
+        """No reranker override model → nothing to migrate; rerank_params
+        stays empty (inherit mode reads the main model's params at runtime)."""
+        import freecad_ai.config as config_mod
+        os.makedirs(os.path.dirname(config_mod.CONFIG_FILE), exist_ok=True)
+        with open(config_mod.CONFIG_FILE, "w") as f:
+            json.dump({
+                "provider": {"name": "ollama", "model": "main-model"},
+                "rerank_llm_model": "",
+                "model_params": {"main-model": {"temperature": 0.7}},
+            }, f)
+        c = load_config()
+        assert c.rerank_params == {}
+
+    def test_load_keeps_existing_rerank_params_over_legacy_seed(self, tmp_config_dir):
+        """Idempotent: a config already carrying rerank_params is not
+        overwritten by the legacy model_params slot."""
+        import freecad_ai.config as config_mod
+        os.makedirs(os.path.dirname(config_mod.CONFIG_FILE), exist_ok=True)
+        with open(config_mod.CONFIG_FILE, "w") as f:
+            json.dump({
+                "provider": {"name": "ollama", "model": "main-model"},
+                "rerank_llm_model": "rr-model",
+                "rerank_params": {"temperature": 0.2},
+                "model_params": {"rr-model": {"temperature": 0.0, "top_k": 20}},
+            }, f)
+        c = load_config()
+        assert c.rerank_params == {"temperature": 0.2}
 
     def test_load_returns_defaults_on_corrupt_json(self, tmp_config_dir):
         import freecad_ai.config as config_mod

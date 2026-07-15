@@ -21,7 +21,8 @@ class FreeCADAIWorkbench(Gui.Workbench):
     def Initialize(self):
         """Called when the workbench is first activated."""
         self.appendToolbar("FreeCAD AI", ["FreeCADAI_OpenChat", "FreeCADAI_OpenSettings"])
-        self.appendMenu("FreeCAD AI", ["FreeCADAI_OpenChat", "FreeCADAI_OpenSettings"])
+        self.appendMenu("FreeCAD AI", ["FreeCADAI_OpenChat", "FreeCADAI_OpenSettings",
+                                       "FreeCADAI_ToggleKeepDock"])
 
     def Activated(self):
         """Called when the workbench is selected."""
@@ -31,7 +32,19 @@ class FreeCADAIWorkbench(Gui.Workbench):
             dock.show()
 
     def Deactivated(self):
-        """Called when leaving this workbench."""
+        """Called when leaving this workbench.
+
+        By default the chat dock is hidden when leaving the workbench. When
+        the ``keep_dock_on_workbench_switch`` setting is enabled, the dock
+        stays open so the FreeCAD AI panel remains usable in other
+        workbenches.
+        """
+        try:
+            from freecad_ai.config import get_config
+            if get_config().keep_dock_on_workbench_switch:
+                return
+        except Exception:
+            pass
         from freecad_ai.ui.chat_widget import get_chat_dock
         dock = get_chat_dock(create=False)
         if dock:
@@ -48,6 +61,7 @@ class OpenChatCommand:
         from freecad_ai.paths import get_icon_path
         from freecad_ai.i18n import translate
         d = {
+            "GroupName": "FreeCAD AI",
             "MenuText": translate("OpenChatCommand", "Open AI Chat"),
             "ToolTip": translate("OpenChatCommand", "Open the FreeCAD AI chat panel"),
         }
@@ -73,6 +87,7 @@ class OpenSettingsCommand:
     def GetResources(self):
         from freecad_ai.i18n import translate
         return {
+            "GroupName": "FreeCAD AI",
             "MenuText": translate("OpenSettingsCommand", "AI Settings"),
             "ToolTip": translate("OpenSettingsCommand", "Configure FreeCAD AI providers and options"),
         }
@@ -81,6 +96,55 @@ class OpenSettingsCommand:
         from freecad_ai.ui.settings_dialog import SettingsDialog
         dlg = SettingsDialog(Gui.getMainWindow())
         dlg.exec()
+
+    def IsActive(self):
+        return True
+
+
+class ToggleKeepDockCommand:
+    """Command to toggle 'keep chat panel open across workbench switches'.
+
+    Registered as a command so it can be bound to a keyboard shortcut via
+    Edit -> Preferences -> Keyboard. Flips the persisted config flag and
+    syncs the dock's visibility so the keybind has an immediate effect.
+    """
+
+    def GetResources(self):
+        from freecad_ai.i18n import translate
+        return {
+            "GroupName": "FreeCAD AI",
+            "MenuText": translate("ToggleKeepDockCommand", "Keep Chat Panel Open"),
+            "ToolTip": translate(
+                "ToggleKeepDockCommand",
+                "Toggle whether the FreeCAD AI chat panel stays open when "
+                "switching to other workbenches"),
+            "Checkable": True,
+        }
+
+    def Activated(self, index=0):
+        from freecad_ai.config import get_config, save_current_config
+        cfg = get_config()
+        cfg.keep_dock_on_workbench_switch = not cfg.keep_dock_on_workbench_switch
+        save_current_config()
+        # Make the change visible right away: showing when turned on,
+        # hiding when turned off.
+        from freecad_ai.ui.chat_widget import get_chat_dock
+        if cfg.keep_dock_on_workbench_switch:
+            dock = get_chat_dock()
+            if dock:
+                dock.show()
+                dock.raise_()
+        else:
+            dock = get_chat_dock(create=False)
+            if dock:
+                dock.hide()
+
+    def IsChecked(self):
+        try:
+            from freecad_ai.config import get_config
+            return bool(get_config().keep_dock_on_workbench_switch)
+        except Exception:
+            return False
 
     def IsActive(self):
         return True
@@ -131,4 +195,5 @@ except Exception:
 
 Gui.addCommand("FreeCADAI_OpenChat", OpenChatCommand())
 Gui.addCommand("FreeCADAI_OpenSettings", OpenSettingsCommand())
+Gui.addCommand("FreeCADAI_ToggleKeepDock", ToggleKeepDockCommand())
 Gui.addWorkbench(FreeCADAIWorkbench())

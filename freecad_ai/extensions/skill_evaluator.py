@@ -383,10 +383,14 @@ class SkillEvaluator:
                         _turn + 1, budget, elapsed, tool_calls)
             from ..llm.client import should_strip_thinking
             from ..config import get_config as _get_cfg
+            _cfg = _get_cfg()
             strip = should_strip_thinking(
-                client.model, _get_cfg().strip_thinking_history)
+                client.model, _cfg.strip_thinking_history)
+            # Defensive: keep history image-free for non-vision models, matching
+            # the chat path (the eval conversation is text-only today).
             messages = conv.get_messages_for_api(
-                api_style=api_style, strip_thinking=strip)
+                api_style=api_style, strip_images=not _cfg.supports_vision,
+                strip_thinking=strip)
             try:
                 response = client.send_with_tools(
                     messages, system=system_prompt, tools=tools_schema
