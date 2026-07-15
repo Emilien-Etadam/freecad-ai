@@ -194,11 +194,14 @@ class ChatDockWidget(
 
     def _render_tool_call(
         self, tool_name, call_id, started=True, success=True, output="",
+        elapsed=None, args_summary="", detail_anchor="",
     ):
         from .message_view import render_tool_call
         return render_tool_call(
             tool_name, call_id,
             started=started, success=success, output=output,
+            elapsed=elapsed, args_summary=args_summary,
+            detail_anchor=detail_anchor,
             palette=self.palette(),
         )
 

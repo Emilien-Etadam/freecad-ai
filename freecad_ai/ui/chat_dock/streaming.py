@@ -30,6 +30,7 @@ class ChatDockStreamingMixin:
     def _on_thinking(self, chunk):
         """Handle a thinking/reasoning delta — render dimmed."""
         import html as html_mod
+        self._stream_chars = getattr(self, "_stream_chars", 0) + len(chunk)
         self._set_chat_activity("think")
         if not self._in_thinking:
             self._in_thinking = True
@@ -53,6 +54,7 @@ class ChatDockStreamingMixin:
         """Handle a streamed token — append to the display."""
         import html as html_mod
 
+        self._stream_chars = getattr(self, "_stream_chars", 0) + len(chunk)
         self._set_chat_activity("respond")
 
         # Close thinking block if transitioning from thinking to regular content
@@ -321,11 +323,27 @@ class ChatDockStreamingMixin:
         self._set_chat_activity("tool", tool_name)
         self._append_html(self._render_tool_call(tool_name, call_id, started=True))
 
-    @Slot(str, str, bool, str)
-    def _on_tool_call_finished(self, tool_name, call_id, success, output):
-        """Render tool call result in the chat."""
+    @Slot(str, str, bool, str, float, str)
+    def _on_tool_call_finished(self, tool_name, call_id, success, output,
+                               elapsed=0.0, args_json=""):
+        """Render tool call result as a compact line in the chat.
+
+        The full output is stashed in ``_tool_call_details`` and reachable
+        through the line's "details" anchor.
+        """
+        from ..chat_utils import _summarize_tool_args
+
+        if not hasattr(self, "_tool_call_details"):
+            self._tool_call_details = {}
+        detail_anchor = ""
+        if output and output.strip():
+            self._tool_call_details[call_id] = output
+            detail_anchor = f"tooldetail:{call_id}"
+
         self._append_html(self._render_tool_call(
-            tool_name, call_id, started=False, success=success, output=output
+            tool_name, call_id, started=False, success=success, output=output,
+            elapsed=elapsed, args_summary=_summarize_tool_args(args_json),
+            detail_anchor=detail_anchor,
         ))
 
     def _on_vision_note(self, message: str):
