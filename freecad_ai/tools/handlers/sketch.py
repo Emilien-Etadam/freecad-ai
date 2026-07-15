@@ -333,6 +333,11 @@ CREATE_SKETCH = ToolDefinition(
     name="create_sketch",
     description=(
         "Create a 2D sketch with geometry (lines, circles, arcs, rectangles) and constraints. "
+        "This is ALSO the correct tool to attach a sketch to a SELECTED or named planar "
+        "face of an existing solid (pass support='Obj', face='Face6' — get the name from "
+        "list_faces) or to a datum plane (support='PlaneName'); do NOT hand-write an "
+        "AttachmentSupport/MapMode macro for this. Without support it attaches to the origin "
+        "`plane` (XY/XZ/YZ). "
         "For PartDesign, specify body_name to add the sketch to a body. "
         "Rectangle dimensions can be expression strings for parametric models: "
         "width='Variables.length', height='Variables.width'. "
@@ -342,10 +347,6 @@ CREATE_SKETCH = ToolDefinition(
         "they are already constrained by the coordinates and dimensions you provide. "
         "COORDINATE SYSTEM: FreeCAD sketches use Y-up. When converting from SVG, images, "
         "or screen coordinates (which use Y-down), negate all Y values."
-        " To sketch on an existing solid's planar face, pass support='Obj' and "
-        "face='Face6' (use list_faces to find the name); to sketch on a datum "
-        "plane pass support='PlaneName'. Without support, attaches to the origin "
-        "`plane` (XY/XZ/YZ) as before."
     ),
     category="modeling",
     parameters=[

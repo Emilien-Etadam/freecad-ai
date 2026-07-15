@@ -127,3 +127,142 @@ class TestSandboxIgnoresPreexistingInvalidity:
         ok, err = _sandbox_test(_INVALID_SOLID, timeout=90)
         assert ok is False, "a newly-created invalid shape must still fail"
         assert "invalid shape" in err, "failure must name the invalid shape"
+
+
+class TestEmptySketchNullShapeNotReported:
+    """Regression for issue #18 follow-up: "create a sketch on the selected
+    face" produces an EMPTY sketch (geometry is drawn later in the editor).
+    On FreeCAD 1.1 an empty Sketcher::SketchObject has Shape.isNull() == True
+    while its State stays "Up-to-date" — a valid intermediate state, not a
+    defect. The post-execution validator reported it as "has null shape",
+    failing the exact "sketch on a selected face" workflow #20 was meant to
+    enable; the model then injected a junk placeholder circle to defeat the
+    check, which is what the user saw ("a random circular sketch somewhere
+    instead of the selected rectangular face").
+    """
+
+    def test_empty_sketch_on_valid_face_passes(self, freecad_available):
+        # Mirror the user's case: an empty sketch attached to a real planar
+        # face of an imported-like solid. The attachment is valid, so the only
+        # thing that can fail is the empty sketch's (benign) null shape.
+        code = (
+            "import Part\n"
+            "f = doc.addObject('Part::Feature', 'ImportedSolid')\n"
+            "f.Shape = Part.makeBox(40, 40, 40)\n"
+            "doc.recompute()\n"
+            "sk = doc.addObject('Sketcher::SketchObject', 'Sketch_Face1')\n"
+            "sk.AttachmentSupport = [(f, 'Face1')]\n"
+            "sk.MapMode = 'FlatFace'\n"
+            "doc.recompute()\n"
+        )
+        ok, err = _sandbox_test(code, timeout=60)
+        assert ok is True, (
+            "an empty sketch validly attached to a face must pass the sandbox; "
+            "got err=" + err
+        )
+
+    def test_empty_body_passes(self, freecad_available):
+        # A PartDesign::Body before its first feature also has a benign null
+        # shape while Up-to-date.
+        code = "doc.addObject('PartDesign::Body', 'Body')\n"
+        ok, err = _sandbox_test(code, timeout=60)
+        assert ok is True, "an empty body must pass the sandbox; got err=" + err
+
+
+class TestHeadlessGuiCallsAreStubbed:
+    """Regression for issue #14 (follow-up): LLM-generated code routinely ends
+    with view-framing boilerplate — Gui.ActiveDocument.ActiveView.viewIsometric(),
+    fitAll(), SendMsgToActiveView("ViewFit"). In the headless sandbox FreeCADGui
+    has no ActiveDocument / ActiveView, so these raise AttributeError and the
+    pre-check rejects otherwise-valid geometry that runs fine in the user's real
+    GUI. @JohnMcLear's "generate a cube" failed this way across three releases.
+    The harness stubs these GUI-only calls to no-ops so validation sees the
+    geometry, not the cosmetics.
+    """
+
+    def test_generate_a_cube_with_view_framing_passes(self, freecad_available):
+        # Verbatim shape of @JohnMcLear's reported code (#14).
+        code = (
+            "import FreeCAD as App\n"
+            "import Part\n"
+            "doc = App.ActiveDocument\n"
+            "cube = doc.addObject('Part::Box', 'Cube')\n"
+            "cube.Length = 50.0\n"
+            "cube.Width = 50.0\n"
+            "cube.Height = 50.0\n"
+            "doc.recompute()\n"
+            "import FreeCADGui as Gui\n"
+            "Gui.ActiveDocument.ActiveView.viewIsometric()\n"
+            "Gui.SendMsgToActiveView('ViewFit')\n"
+        )
+        ok, err = _sandbox_test(code, timeout=60)
+        assert ok is True, (
+            "valid geometry followed by headless-only GUI view calls must pass "
+            "the sandbox; got err=" + err
+        )
+
+
+@pytest.fixture
+def simple_saved_doc(freecad_available):
+    """Path to a trivial saved .FCStd (one box) — exercises the openDocument
+    branch of the sandbox harness."""
+    fd, doc_path = tempfile.mkstemp(suffix=".FCStd")
+    os.close(fd)
+    os.unlink(doc_path)
+    builder = (
+        "import FreeCAD as App, Part\n"
+        "doc = App.newDocument('Simple')\n"
+        "f = doc.addObject('Part::Feature', 'Box')\n"
+        "f.Shape = Part.makeBox(10, 10, 10)\n"
+        "doc.recompute()\n"
+        "doc.saveAs(" + repr(doc_path) + ")\n"
+        "exit(0)\n"
+    )
+    script = tempfile.mktemp(suffix=".py")
+    with open(script, "w") as fh:
+        fh.write(builder)
+    subprocess.run(
+        [_find_freecad_cmd(), "-c", script],
+        capture_output=True,
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+        timeout=120,
+    )
+    assert os.path.isfile(doc_path), "fixture failed to save the document"
+    yield doc_path
+    for p in (doc_path, script):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+
+
+class TestSandboxExitsAgainstOpenedDocument:
+    """Regression for issue #14: the harness script wrote its result file but
+    never forced the interpreter to exit. On FreeCAD builds where running a
+    script via `-c` against an OPENED document leaves the process in
+    interactive mode (the Qt/console event loop never returns), the subprocess
+    never terminated, so subprocess.run() blocked until its timeout and the
+    sandbox reported a spurious "code timed out" — even for trivial code like
+    creating a box. The harness now calls os._exit(0) after writing the result.
+
+    Diagnosed and first patched by @galberding on the issue thread.
+    """
+
+    def test_trivial_code_against_opened_document_does_not_hang(
+        self, simple_saved_doc
+    ):
+        # Without the os._exit(0) fix this blocks for the full timeout and
+        # returns ("Sandbox: code timed out after N seconds"); with it, the
+        # subprocess exits as soon as the result file is written.
+        code = (
+            "f = doc.addObject('Part::Feature', 'Box2')\n"
+            "import Part\n"
+            "f.Shape = Part.makeBox(5, 5, 5)\n"
+            "doc.recompute()\n"
+        )
+        ok, err = _sandbox_test(code, timeout=30, document_path=simple_saved_doc)
+        assert "timed out" not in err, (
+            "sandbox hung on the openDocument path — the harness must force "
+            "the interpreter to exit after writing its result (issue #14)"
+        )
+        assert ok is True, "trivial valid code on an opened document must pass; got err=" + err

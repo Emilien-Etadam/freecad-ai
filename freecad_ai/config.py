@@ -399,6 +399,12 @@ class AppConfig:
     # Max agentic tool-loop turns per user message. 0 = endless (the Stop
     # button is then the only brake). Default 30 preserves prior behavior.
     max_tool_turns: int = 30
+    # Wall-clock budget (seconds) for executing a single generated code block —
+    # applied to BOTH the headless sandbox dry-run and the live SIGALRM. Kept
+    # user-tunable so heavy but valid geometry ops (e.g. scaling a detailed
+    # model via Shape.transformGeometry, whose cost grows with face count) can
+    # be given more time on large models (issue #14).
+    execution_timeout: int = 30
     enable_tools: bool = True
     thinking: str = "off"  # "off", "on", "extended"
     strip_thinking_history: bool | None = None  # None=auto-detect, True/False=override
@@ -446,11 +452,21 @@ class AppConfig:
     rerank_llm_base_url: str = ""
     rerank_llm_api_key: str = ""
     rerank_llm_model: str = ""
+    # Sampling params for the reranker's *override* model. Kept in their own
+    # namespace (never the shared model_params dict) so the reranker can never
+    # overwrite the main model's params — the bug behind issue #30. Only used
+    # when rerank_llm_model is set; in inherit mode the reranker reads the main
+    # model's params instead.
+    rerank_params: dict = field(default_factory=dict)
 
     # Chat dock layout persistence. FreeCAD's native mw.restoreState runs
     # before the workbench activates, so our dock misses the restore and
     # lands at its default area every startup. We snapshot our own state
     # on dock-move events and reapply in get_chat_dock().
+    # When True, the chat dock is NOT hidden when switching away from the
+    # FreeCAD AI workbench — the panel stays open and usable in any other
+    # workbench. When False (default), leaving the workbench hides the dock.
+    keep_dock_on_workbench_switch: bool = False
     chat_dock_floating: bool = False
     chat_dock_area: str = "right"  # "left", "right", "top", "bottom"
     chat_dock_geometry: list = field(default_factory=list)  # [x, y, w, h] when floating
@@ -533,6 +549,12 @@ def load_config() -> AppConfig:
             cfg = AppConfig.from_dict(data)
         except (json.JSONDecodeError, TypeError, KeyError):
             pass
+    # Migrate pre-namespace configs: the reranker override model's params used
+    # to live in the shared model_params dict. Seed the new rerank_params slot
+    # from there so override users don't silently lose their params on upgrade.
+    # Idempotent — only fills an empty rerank_params (issue #30 follow-up).
+    if cfg.rerank_llm_model and not cfg.rerank_params:
+        cfg.rerank_params = dict(cfg.model_params.get(cfg.rerank_llm_model, {}))
     _apply_param_store_overrides(cfg)
     _write_to_param_store(cfg)
     return cfg

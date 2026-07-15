@@ -367,6 +367,7 @@ class LLMClient:
     def _openai_headers(self) -> dict:
         headers = {
             "Content-Type": "application/json",
+            "User-Agent": "FreeCAD-AI",
         }
         resolved_key = self._resolve_api_key()
         if resolved_key:
@@ -591,6 +592,7 @@ class LLMClient:
     def _anthropic_headers(self) -> dict:
         headers = {
             "Content-Type": "application/json",
+            "User-Agent": "FreeCAD-AI",
             "x-api-key": self._resolve_api_key(),
             "anthropic-version": ANTHROPIC_API_VERSION,
         }

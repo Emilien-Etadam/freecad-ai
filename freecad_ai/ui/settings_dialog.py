@@ -201,10 +201,6 @@ class SettingsDialog(QDialog):
         self.resize(540, 700)
         self._test_thread = None
         self._last_default_prompt = ""
-        # Unsaved reranker params, keyed by model name. Survives renaming
-        # the override model within one dialog session so the user doesn't
-        # lose typed-but-not-saved params.
-        self._rerank_pending_params: dict[str, dict] = {}
         self._rerank_last_model = ""
         self._build_ui()
         self._load_from_config()
@@ -302,6 +298,22 @@ class SettingsDialog(QDialog):
             translate("SettingsDialog", "Max tool-loop turns (0 = endless):"),
             self.max_tool_turns_spin)
 
+        self.execution_timeout_spin = QSpinBox()
+        self.execution_timeout_spin.setRange(5, 600)
+        self.execution_timeout_spin.setSingleStep(5)
+        self.execution_timeout_spin.setValue(30)
+        self.execution_timeout_spin.setSuffix(translate("SettingsDialog", " s"))
+        self.execution_timeout_spin.setToolTip(
+            translate("SettingsDialog",
+                      "Time budget for executing one generated code block "
+                      "(sandbox dry-run and live run).\n"
+                      "Raise it for heavy operations on large/detailed models "
+                      "(e.g. scaling). Default: 30.")
+        )
+        fixed_layout.addRow(
+            translate("SettingsDialog", "Code execution timeout:"),
+            self.execution_timeout_spin)
+
         model_params_layout.addLayout(fixed_layout)
 
         # Freeform sampling parameters table (saved per model name)
@@ -364,6 +376,16 @@ class SettingsDialog(QDialog):
             translate("SettingsDialog", "Auto-execute code in Act mode (skip confirmation dialog)")
         )
         behavior_layout.addWidget(self.auto_execute_check)
+
+        self.keep_dock_check = QCheckBox(
+            translate("SettingsDialog", "Keep chat panel open when switching workbenches")
+        )
+        self.keep_dock_check.setToolTip(translate(
+            "SettingsDialog",
+            "When enabled, the FreeCAD AI chat panel stays docked and usable "
+            "in other workbenches instead of hiding when you leave the "
+            "FreeCAD AI workbench."))
+        behavior_layout.addWidget(self.keep_dock_check)
 
         # Thinking mode
         thinking_layout = QHBoxLayout()
@@ -836,12 +858,14 @@ class SettingsDialog(QDialog):
         self.max_tokens_spin.setValue(cfg.max_tokens)
         self.context_window_spin.setValue(cfg.context_window)
         self.max_tool_turns_spin.setValue(cfg.max_tool_turns)
+        self.execution_timeout_spin.setValue(cfg.execution_timeout)
 
         # Model parameters table
         self._load_model_params_table(cfg.provider.model, cfg)
 
         self.enable_tools_check.setChecked(cfg.enable_tools)
         self.auto_execute_check.setChecked(cfg.auto_execute)
+        self.keep_dock_check.setChecked(cfg.keep_dock_on_workbench_switch)
 
         # Tool reranking
         method_map = {"off": 0, "keyword": 1, "llm": 2}
@@ -860,8 +884,7 @@ class SettingsDialog(QDialog):
         self.rerank_llm_base_url_edit.setText(cfg.rerank_llm_base_url)
         self.rerank_llm_api_key_edit.setText(cfg.rerank_llm_api_key)
         self.rerank_llm_model_edit.setText(cfg.rerank_llm_model)
-        # Reset pending edits from any previous dialog open
-        self._rerank_pending_params = {}
+        # Force a fresh resolve (setText above may have fired the signal mid-load)
         self._rerank_last_model = ""
         self._on_rerank_model_changed()
         self._on_rerank_method_changed(self.rerank_method_combo.currentIndex())
@@ -1115,6 +1138,7 @@ class SettingsDialog(QDialog):
         cfg.max_tokens = self.max_tokens_spin.value()
         cfg.context_window = self.context_window_spin.value()
         cfg.max_tool_turns = self.max_tool_turns_spin.value()
+        cfg.execution_timeout = self.execution_timeout_spin.value()
 
         # Save model parameters for the current model
         model_name = self.model_edit.text().strip()
@@ -1129,6 +1153,7 @@ class SettingsDialog(QDialog):
 
         cfg.enable_tools = self.enable_tools_check.isChecked()
         cfg.auto_execute = self.auto_execute_check.isChecked()
+        cfg.keep_dock_on_workbench_switch = self.keep_dock_check.isChecked()
 
         thinking_values = ["off", "on", "extended"]
         cfg.thinking = thinking_values[self.thinking_combo.currentIndex()]
@@ -1182,27 +1207,12 @@ class SettingsDialog(QDialog):
         rerank_model = self.rerank_llm_model_edit.text().strip()
         cfg.rerank_llm_model = rerank_model
 
-        # Save the reranker params table into cfg.model_params, keyed by
-        # the effective model name. When inheriting, that's the main model
-        # — edits in the reranker table propagate to the main model's
-        # entry (last-save-wins against the main table, which already
-        # wrote above). When overriding, it's the override model's slot.
-        effective_model = rerank_model or cfg.provider.model
-        rerank_params = self._read_rerank_params_table()
-        if rerank_params:
-            cfg.model_params[effective_model] = rerank_params
-
-        # Also persist any pending params for other override models that
-        # were edited earlier in this dialog session (before the user
-        # renamed the override field). Empty tables clear the slot, but
-        # never for the main model — the main table owns that.
-        for model_name, params in self._rerank_pending_params.items():
-            if model_name == effective_model:
-                continue  # already handled above
-            if params:
-                cfg.model_params[model_name] = params
-            elif model_name in cfg.model_params and model_name != cfg.provider.model:
-                del cfg.model_params[model_name]
+        # Save the reranker params into their own namespace (cfg.rerank_params),
+        # never the shared model_params dict. In inherit mode the reranker has
+        # no params of its own — the main Model Parameters table owns the main
+        # model's slot, so the reranker can't clobber it (issue #30).
+        cfg.rerank_params = self._resolve_rerank_params(
+            rerank_model, self._read_rerank_params_table())
 
         save_current_config()
         self.accept()
@@ -1211,45 +1221,52 @@ class SettingsDialog(QDialog):
         """Show the LLM provider subgroup only when 'LLM' is selected."""
         self.rerank_llm_group.setVisible(index == 2)
 
+    @staticmethod
+    def _resolve_rerank_params(rerank_model: str, table_params: dict) -> dict:
+        """Reranker params to persist into cfg.rerank_params.
+
+        Override mode (a distinct model is set) → persist the table. Inherit
+        mode (empty override) → persist nothing; the reranker reads the main
+        model's params at runtime and the main Model Parameters table owns
+        that slot, so the reranker can never overwrite it (issue #30).
+        """
+        return dict(table_params) if rerank_model.strip() else {}
+
     def _on_rerank_model_changed(self, *_args):
         """Refresh the reranker params table for the current model state.
 
-        - Empty override → prefill with the main Model Parameters table's
-          *live* values, lock the table read-only, and disable buttons.
-          Edits belong on the main table.
-        - Non-empty override → populate with pending/saved/default params
-          for that specific model, enable editing.
+        - Empty override → mirror the main Model Parameters table's live
+          values (edits belong on the main table; the reranker inherits them).
+        - Non-empty override → show the reranker's own params. Renaming the
+          override model keeps the current edits (params are a single set, not
+          keyed per model); entering override from inherit loads the saved
+          cfg.rerank_params, falling back to provider defaults.
         """
         cfg = get_config()
         prev_model = getattr(self, "_rerank_last_model", "") or ""
         model = self.rerank_llm_model_edit.text().strip()
-
-        # Persist unsaved edits under the previous (override) model name
-        # so typing a fresh override name doesn't drop them. We only stash
-        # when the previous state was editable (override mode).
-        if prev_model:
-            self._rerank_pending_params[prev_model] = self._read_rerank_params_table()
-
         self._rerank_last_model = model
-        inheriting = not model
 
-        if inheriting:
-            # Show live values from the main params table (not disk) —
-            # reflects in-dialog edits the user may have just made there.
-            # Stays editable: changes write to the main model's slot in
-            # cfg.model_params (shared with the main table).
-            params = self._read_model_params_table()
-            self._populate_rerank_params_table(params)
+        if not model:
+            # Inherit: show the main model's live params (reflects in-dialog
+            # edits there). These are not persisted under the reranker — the
+            # main table is authoritative.
+            self._populate_rerank_params_table(self._read_model_params_table())
             self._rerank_params_label.setText(translate(
                 "SettingsDialog",
-                "Model parameters (inheriting main model — edits also apply to main):"))
+                "Model parameters (inheriting main model — edit on the main table):"))
             return
 
-        # Override model: pending edits win, then saved, then provider defaults
-        if model in self._rerank_pending_params:
-            params = self._rerank_pending_params[model]
-        else:
-            params = dict(cfg.model_params.get(model, {}))
+        if prev_model:
+            # Was already overriding — the user just renamed the model.
+            # Keep the current edits (single param set, not per-model).
+            self._rerank_params_label.setText(translate(
+                "SettingsDialog", "Model parameters (reranker override):"))
+            return
+
+        # Entering override from inherit: load saved reranker params, else
+        # provider defaults.
+        params = dict(cfg.rerank_params)
         if not params:
             provider_name = (
                 self.rerank_llm_provider_combo.currentData()

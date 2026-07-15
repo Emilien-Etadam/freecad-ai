@@ -545,7 +545,7 @@ def _handle_execute_code(code: str) -> ToolResult:
 
 EXECUTE_CODE = ToolDefinition(
     name="execute_code",
-    description="Execute arbitrary Python code in FreeCAD's interpreter. Use this as a fallback when structured tools don't cover the needed operation. The code has access to FreeCAD, Part, PartDesign, Sketcher, Draft modules.",
+    description="Execute arbitrary Python code in FreeCAD's interpreter. LAST-RESORT fallback for operations no structured tool covers — check the tool list first. Do NOT use it to re-implement a covered operation (e.g. attaching a sketch to a face is `create_sketch`, not a hand-written AttachmentSupport macro). The code has access to FreeCAD, Part, PartDesign, Sketcher, Draft modules.",
     category="general",
     parameters=[
         ToolParam("code", "string", "Python code to execute"),

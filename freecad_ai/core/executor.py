@@ -119,13 +119,26 @@ def _collect_object_issues(objects_state, baseline_bad):
     newly broke are reported. The shape source of truth lives here so the
     subprocess harness and the unit tests exercise identical logic.
     """
+    # Object types whose Shape is legitimately null in a valid, complete state.
+    # An empty sketch ("create a sketch on the selected face" — geometry is
+    # drawn later in the editor) and an empty body (a container before its
+    # first feature) both report Shape.isNull() == True while State stays
+    # "Up-to-date". Flagging their null shape produced a false positive that
+    # failed the sketch-on-a-face workflow; the model then injected junk
+    # placeholder geometry to defeat the check (issue #18). A genuinely failed
+    # object of these types (e.g. a sketch whose attachment didn't resolve)
+    # still lands in an Invalid state and is caught by the invalid_state report
+    # below. Kept local so it ships with the function source into the sandbox
+    # harness (inspect.getsource doesn't carry module globals).
+    null_shape_ok_types = {"Sketcher::SketchObject", "PartDesign::Body"}
     issues = []
     for st in objects_state:
         name = st["name"]
         if name in baseline_bad:
             continue
         if st.get("null"):
-            issues.append("Object '" + name + "' has null shape")
+            if st.get("type") not in null_shape_ok_types:
+                issues.append("Object '" + name + "' has null shape")
         elif st.get("invalid"):
             issues.append("Object '" + name + "' has invalid shape")
         if st.get("invalid_state"):
@@ -190,9 +203,22 @@ try:
 
     try:
         import FreeCADGui as Gui
-        # Console mode: Gui module exists but has no active view.
-        # Stub methods that LLM code commonly calls so they become no-ops.
+        # Console mode: Gui module exists but has no active document/view.
+        # LLM-generated code routinely ends with view-framing cosmetics
+        # (Gui.ActiveDocument.ActiveView.viewIsometric(), fitAll(),
+        # SendMsgToActiveView("ViewFit")). Headlessly FreeCADGui has no
+        # ActiveDocument, so these raise AttributeError and fail the pre-check
+        # for geometry that runs fine in the user's real GUI. Neutralize the
+        # whole Gui.ActiveDocument.* surface with a recursive no-op — any
+        # attribute access or call returns the same stub, so arbitrary view
+        # chains become harmless while the geometry is still validated (#14).
         if not hasattr(Gui, "ActiveDocument") or Gui.ActiveDocument is None:
+            class _NoOpGui:
+                def __getattr__(self, _name):
+                    return self
+                def __call__(self, *a, **kw):
+                    return self
+            Gui.ActiveDocument = _NoOpGui()
             Gui.SendMsgToActiveView = lambda *a, **kw: None
             Gui.updateGui = lambda *a, **kw: None
     except ImportError:
@@ -213,8 +239,8 @@ try:
                 pass
         _state = getattr(_obj, "State", None)
         _bad_state = bool(_state and "Invalid" in _state)
-        return {{"name": _obj.Name, "null": _null,
-                 "invalid": _invalid, "invalid_state": _bad_state}}
+        return {{"name": _obj.Name, "type": getattr(_obj, "TypeId", ""),
+                 "null": _null, "invalid": _invalid, "invalid_state": _bad_state}}
 
     # Baseline: objects already broken in the opened document BEFORE user code
     # runs. The sandbox dry-runs against a copy of the saved document, so an
@@ -260,6 +286,14 @@ finally:
         pass
     with open({result_path!r}, "w") as f:
         json.dump(result, f)
+    # Force the interpreter to exit. On some FreeCAD builds, running a script
+    # via `-c` against an OPENED document leaves the process in interactive
+    # mode (Qt/console event loop never returns), so subprocess.run() would
+    # block until its timeout and the sandbox always reported a spurious
+    # "timed out" — even for trivial code (issue #14). os._exit skips atexit
+    # handlers / lingering non-daemon threads that a plain sys.exit can wait on.
+    import os as _os
+    _os._exit(0)
 '''.format(
         collect_fn_src=inspect.getsource(_collect_object_issues),
         open_block=open_block,
@@ -331,7 +365,27 @@ def _auto_save(namespace: dict):
         pass  # Best-effort
 
 
-def execute_code(code: str, timeout: int = 30, sandbox: bool = True,
+_DEFAULT_EXECUTION_TIMEOUT = 30
+
+
+def _configured_timeout(default: int = _DEFAULT_EXECUTION_TIMEOUT) -> int:
+    """Resolve the execution timeout (seconds) from user config.
+
+    Heavy-but-valid geometry ops (e.g. scaling a detailed model via
+    Shape.transformGeometry) can exceed a fixed budget; sourcing it from
+    config lets users raise it for large models instead of hitting a
+    hardcoded wall on both the sandbox and live paths (issue #14). Falls
+    back to ``default`` if config is unavailable or holds a bad value.
+    """
+    try:
+        from ..config import get_config
+        val = int(getattr(get_config(), "execution_timeout", default))
+        return val if val > 0 else default
+    except Exception:
+        return default
+
+
+def execute_code(code: str, timeout: int | None = None, sandbox: bool = True,
                  skip_safety: bool = False) -> ExecutionResult:
     """Execute Python code in FreeCAD's context.
 
@@ -344,10 +398,16 @@ def execute_code(code: str, timeout: int = 30, sandbox: bool = True,
       3. Undo transactions (roll back on Python-level failure)
       4. Auto-save (backup document before execution)
 
+    timeout: Wall-clock budget (seconds) applied to both the sandbox dry-run
+        and the live SIGALRM. ``None`` (the default) resolves it from
+        ``AppConfig.execution_timeout`` so the GUI's setting is honored.
+
     skip_safety: When True, skip static validation, the headless sandbox
         pre-check, and the SIGALRM timeout. The undo transaction (rollback on
         failure) and auto-save remain active. Used by Dangerous mode only.
     """
+    if timeout is None:
+        timeout = _configured_timeout()
     # Layer 1: Static validation (skipped in dangerous mode)
     if not skip_safety:
         warnings = _validate_code(code)

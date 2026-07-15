@@ -11,6 +11,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **Send appeared to do nothing after clicking the button** (`freecad_ai/ui/chat_dock/send.py`). MCP connection and LLM tool reranking ran on the main thread *before* the loading indicator appeared, freezing the UI for up to two minutes with no feedback. Loading/stream UI now shows immediately; setup errors are surfaced in chat and the Report View. The reranker LLM client uses a 30 s HTTP timeout so a dead provider falls back to keyword reranking quickly.
 
+## [0.18.0-alpha] - 2026-07-04
+
+A small feature-and-fix release bundling two community contributions from
+@3dyuval with a tool-routing steering improvement.
+
+### Added
+
+- **Keep the chat panel open across workbench switches** (`InitGui.py`, `freecad_ai/config.py`, `freecad_ai/ui/settings_dialog.py`). A new opt-in `keep_dock_on_workbench_switch` setting (off by default) stops the FreeCAD AI dock from hiding when you leave the workbench, so the panel stays usable everywhere. Exposed both as a Settings checkbox and a keybindable "Keep Chat Panel Open" menu command. ([#34](https://github.com/ghbalf/freecad-ai/issues/34), [#35](https://github.com/ghbalf/freecad-ai/pull/35); thanks @3dyuval)
+
+### Fixed
+
+- **Custom OpenAI-compatible endpoints no longer 403 on a missing User-Agent** (`freecad_ai/llm/client.py`). `urllib` defaults to a `Python-urllib/x.y` User-Agent that some WAFs and reverse proxies in front of self-hosted gateways reject; requests now send an explicit `User-Agent: FreeCAD-AI`. Applied to both the OpenAI and Anthropic header builders. ([#33](https://github.com/ghbalf/freecad-ai/pull/33); thanks @3dyuval)
+
+### Changed
+
+- **Improved Act-mode steering toward `create_sketch` for face attachment** (`freecad_ai/core/system_prompt.py`, `freecad_ai/tools/freecad_tools.py`). When asked to "sketch on the selected face", the model was hand-rolling a raw `AttachmentSupport`/`MapMode` macro via `execute_code` instead of calling `create_sketch(support=…, face=…)` — which already handles attachment, planar-face validation, and offset. The Act-mode strategy now calls out the face-sketch route explicitly, `create_sketch`'s face capability is lifted to the front of its description, and `execute_code`/`run_macro` are framed as last resorts. Steering-only (prompt + tool descriptions); guarded by text-assertion regression tests. ([#28](https://github.com/ghbalf/freecad-ai/issues/28))
+
+## [0.17.0-alpha] - 2026-06-22
+
+A feature release adding the first non-STDIO MCP transport: the bundled MCP server can now be reached over HTTP with Server-Sent Events, alongside the existing newline-delimited STDIO transport. Contributed by @Shuenhoy ([#29](https://github.com/ghbalf/freecad-ai/pull/29)).
+
+### Added
+
+- **HTTP/SSE MCP server transport** (`freecad_ai/mcp/transport.py`, `freecad_ai/mcp/server.py`, `mcp_server_http.py`). `SSEServerTransport` serves the same `ToolRegistry` over HTTP: clients open an SSE stream on `GET /sse` and post JSON-RPC requests to `POST /messages`, while STDIO remains the default. Still zero external dependencies — built on the standard library's `http.server`/`socketserver`. A new `mcp_server_http.py` entry point launches it from a FreeCAD AppImage. ([#29](https://github.com/ghbalf/freecad-ai/pull/29); thanks @Shuenhoy)
+
+### Security
+
+- **Cross-origin tool invocation is blocked on the HTTP/SSE server** (`freecad_ai/mcp/transport.py`). `POST /messages` executes arbitrary tools (including `run_macro`), and the initial implementation replied with `Access-Control-Allow-Origin: *` and a permissive preflight. Even bound to loopback, any web page the user had open could drive FreeCAD via a cross-origin `fetch()` — a drive-by RCE / DNS-rebinding vector. Every request is now gated: the `Host` header must be loopback and any cross-origin `Origin` is rejected with 403; the wildcard CORS headers are gone. Native MCP clients send no `Origin` and are unaffected; the `allowed_hosts`/`allowed_origins` constructor params can deliberately widen this for LAN exposure.
+
+### Fixed
+
+- **SSE socket writes are serialized** (`freecad_ai/mcp/transport.py`). Under `ThreadingMixIn`, the keepalive loop (GET `/sse` thread) and a tool response (POST `/messages` thread) could write to the same socket concurrently and interleave bytes, corrupting the event stream. All writes now go through a single lock-held `write`+`flush`.
+- **`__file__` guarded in the HTTP entry point** (`mcp_server_http.py`). The module referenced `__file__` at module scope, which raises `NameError` under the documented `exec(open(...).read())` launch mode; it now falls back via `globals().get("__file__")`.
+
+### Tests
+
+- Unit: `tests/unit/test_mcp_sse_transport.py` (13 tests) — covers the SSE/`/messages` round trip, write serialization under concurrency, the `__file__` exec-mode guard, and a live-server check that a cross-origin `POST` is rejected with 403 and carries no `Access-Control-Allow-Origin` header.
+
+## [0.16.5-alpha] - 2026-06-17
+
+A bug-fix for the temperature-persistence half of [issue #30](https://github.com/ghbalf/freecad-ai/issues/30) (@AVAVAVA1): a per-model sampling parameter set in Settings reverted to its default after Save.
+
+### Fixed
+
+- **Reranker params could overwrite the main model's params on save** (`freecad_ai/config.py`, `freecad_ai/ui/settings_dialog.py`, `freecad_ai/ui/chat_widget.py`). The reranker stored its sampling parameters in the *shared* `model_params` dict, keyed by model name. When the reranker inherited the main model (override field empty — including whenever reranking is off), its "effective model" *was* the main model, so the Save handler wrote the reranker's table — a stale snapshot taken when the dialog opened, before any edit — into the main model's slot, clobbering the value the user had just changed (e.g. `temperature` reverting to `0.3`). The reranker now keeps its parameters in a dedicated `rerank_params` field that can never collide with `model_params`: in override mode the reranker reads/writes its own slot; in inherit mode it reads the main model's params and persists nothing of its own. Existing configs are migrated on load (the legacy reranker-override slot seeds `rerank_params` once). ([issue #30](https://github.com/ghbalf/freecad-ai/issues/30); thanks @AVAVAVA1) ([#32](https://github.com/ghbalf/freecad-ai/pull/32))
+
+### Tests
+
+- Unit: `tests/unit/test_reranker_namespace.py` — the runtime read path (`_build_rerank_llm_client`) sources params from `rerank_params` when overriding and from the main model when inheriting, and the persistence rule (`SettingsDialog._resolve_rerank_params`) writes the table only in override mode. `tests/unit/test_config.py` gains the `rerank_params` default/round-trip and the migration-seed cases (override seeds, inherit no-ops, idempotent when already present).
+
+## [0.16.4-alpha] - 2026-06-16
+
+A bug-fix patch for the vision half of [issue #30](https://github.com/ghbalf/freecad-ai/issues/30) (@AVAVAVA1): a model without vision support errored out on every follow-up turn once an image was anywhere in the conversation history.
+
+### Fixed
+
+- **Images in history were sent to non-vision models** (`freecad_ai/core/conversation.py`, `freecad_ai/ui/chat_widget.py`). Once an image entered the conversation — a manual attachment, or a viewport snapshot the assistant attaches automatically — it stayed in the history and was re-sent on every later turn. With a text-only model selected (and no `describe_image` vision-fallback tool configured), the provider rejected the image block and the conversation stayed broken until it was cleared. `get_messages_for_api()` gains a `strip_images` option that replaces history image blocks with a `[Image omitted — the current model has no vision support]` placeholder; the chat send path, the auto-retry-on-error path (which attaches a viewport snapshot before resending), and the headless skill evaluator all apply it when the active model lacks vision and no describe-image fallback is available. When that fallback *is* configured, the existing describe-and-substitute behavior is unchanged. ([issue #30](https://github.com/ghbalf/freecad-ai/issues/30); thanks @AVAVAVA1)
+
+### Tests
+
+- Unit: `tests/unit/test_conversation.py::TestStripImagesForNonVisionModels` — image blocks are stripped to a placeholder for both OpenAI and Anthropic formats, surrounding text is preserved, images are kept when stripping isn't requested, a `describe_fn` still takes precedence, and a system message carrying a viewport snapshot (the retry path's shape) is covered.
+
+## [0.16.3-alpha] - 2026-06-07
+
+A bug-fix patch for two headless-sandbox false positives: the pre-check rejected valid code that runs fine in the real FreeCAD GUI, blocking common workflows. Reported on [issue #18](https://github.com/ghbalf/freecad-ai/issues/18) (@0xrushi) and [issue #14](https://github.com/ghbalf/freecad-ai/issues/14) (@JohnMcLear).
+
+### Fixed
+
+- **Empty sketches were flagged as broken** (`freecad_ai/core/executor.py`). "Create a sketch on the selected face" produces an empty sketch (geometry is drawn later in the editor). On FreeCAD 1.1 an empty `Sketcher::SketchObject` reports `Shape.isNull() == True` while its `State` stays `Up-to-date` — a valid intermediate state, not a defect — but the post-execution validator reported `has null shape` and failed every retry, after which the model injected a placeholder circle to satisfy the check (the stray sketch users saw instead of one on the selected face). The validator now skips the null-shape report for object types whose empty shape is valid (`Sketcher::SketchObject`, `PartDesign::Body`); the separate Invalid-state check still catches a sketch whose attachment genuinely fails. ([issue #18](https://github.com/ghbalf/freecad-ai/issues/18); thanks @0xrushi)
+- **Headless view-framing calls failed the pre-check** (`freecad_ai/core/executor.py`). LLM-generated code routinely ends with view cosmetics — `Gui.ActiveDocument.ActiveView.viewIsometric()`, `fitAll()`, `SendMsgToActiveView("ViewFit")`. Headlessly `FreeCADGui` has no `ActiveDocument`, so these raised `AttributeError: module 'FreeCADGui' has no attribute 'ActiveDocument'` and the sandbox rejected otherwise-valid geometry — e.g. "generate a cube", which surfaced once the v0.16.2-alpha hang fix removed the timeout that had been masking it. The sandbox harness now stubs the whole `Gui.ActiveDocument.*` surface with a recursive no-op, so view chains are harmless while the geometry is still validated. ([issue #14](https://github.com/ghbalf/freecad-ai/issues/14); thanks @JohnMcLear)
+
+### Tests
+
+- Integration: `tests/integration/test_sandbox_validation.py::TestEmptySketchNullShapeNotReported` (empty sketch on a real face, and empty body, pass) and `::TestHeadlessGuiCallsAreStubbed` (verbatim "generate a cube" with view framing passes). Unit: `tests/unit/test_executor.py::TestCollectObjectIssues` gains empty-sketch/empty-body exemption and the matching safety-net cases. Existing bad-attachment and newly-invalid negative controls remain green.
+
+## [0.16.2-alpha] - 2026-06-06
+
+A bug-fix patch for [issue #14](https://github.com/ghbalf/freecad-ai/issues/14): the headless sandbox pre-check could time out on *any* operation — even a trivial one — whenever a saved document was open, making Act mode unusable on affected setups. This supersedes the v0.16.1-alpha timeout change, which addressed the wrong cause.
+
+### Fixed
+
+- **Sandbox dry-run hung against an open document** (`freecad_ai/core/executor.py`). The harness script wrote its result file but never forced the interpreter to exit. On FreeCAD builds where running a script via `-c` against an opened document leaves the process in interactive mode (the Qt/console event loop never returns), the subprocess never terminated, so the pre-check blocked until its timeout and reported a spurious "code timed out after N seconds" — regardless of what the code did (even, e.g., "render a cube"). The harness now calls `os._exit(0)` after writing its result, so the subprocess always terminates promptly. Diagnosed and first patched by @galberding; also reported by @JohnMcLear and @trougnouf. ([issue #14](https://github.com/ghbalf/freecad-ai/issues/14))
+
+### Changed
+
+- **`execution_timeout` default reverted to 30s** (from the 60s introduced in v0.16.1-alpha). With the hang fixed, the higher default only lengthened the wait before a genuinely-stuck operation was cancelled; the setting remains user-tunable (range 5--600s) for heavy operations on large models.
+
+### Tests
+
+- Unit: `tests/unit/test_executor.py::TestSandboxHarnessForcesExit` (the generated harness must force a process exit). Integration: `tests/integration/test_sandbox_validation.py::TestSandboxExitsAgainstOpenedDocument` (trivial code on an opened document returns instead of timing out).
+
+## [0.16.1-alpha] - 2026-06-06
+
+A bug-fix patch for [issue #14](https://github.com/ghbalf/freecad-ai/issues/14): generated code could time out on large or detailed models regardless of the operation, with no way to extend the limit.
+
+### Fixed
+
+- **Code-execution timeout is now configurable, and the default was raised 30 → 60s** (`freecad_ai/core/executor.py`, `freecad_ai/config.py`, `freecad_ai/ui/settings_dialog.py`). The budget applied to **both** the headless sandbox pre-check and live execution was hardcoded at 30s. Heavy-but-valid geometry operations — most notably scaling a detailed or imported model via `Shape.transformGeometry`, whose cost grows with the model's face count — genuinely exceed 30s and were killed on both paths with no recourse. The previous patch ([0.15.1-alpha](https://github.com/ghbalf/freecad-ai/releases/tag/v0.15.1-alpha)) only moved the wall from 15s to 30s. A new **"Code execution timeout"** setting (Settings, range 5–600s) now controls this budget; `execute_code` reads it when no explicit timeout is given, so large-model users can raise it as needed. ([issue #14](https://github.com/ghbalf/freecad-ai/issues/14), reported by trougnouf; still-broken reports by JohnMcLear and galberding) ([#24](https://github.com/ghbalf/freecad-ai/pull/24))
+
+### Tests
+
+- Unit: `tests/unit/test_config.py` (`execution_timeout` default and round-trip) and `tests/unit/test_executor.py::TestConfigurableExecutionTimeout` (`execute_code` honors the configured value and the new 60s default when no explicit timeout is passed).
+
+## [0.16.0-alpha] - 2026-06-03
+
 A feature release adding a datum-geometry and transform/duplicate toolset — sketching on faces and named planes, parametric datum planes and lines, relative transforms, and independent parametric copies — together with a sandbox fix that unblocks editing imported (mesh→solid) parts. This work grew out of [issue #18](https://github.com/ghbalf/freecad-ai/issues/18) (reported by 0xrushi): a snap-fit workflow on an imported solid that fell out of the parametric toolchain.
 
 ### Added

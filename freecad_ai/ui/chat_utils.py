@@ -22,14 +22,14 @@ def _build_rerank_llm_client(cfg):
     too, for e.g. running reranking on a local Ollama model while the
     main chat uses a cloud provider.
 
-    Model params for the reranker's effective model are always sourced
-    from the shared ``cfg.model_params`` dict, keyed by model name.
-    This means:
-      - Inherited model → same params as main chat (handles provider
-        quirks like Moonshot's locked ``temperature=1``)
-      - Override model → params configured via the reranker's inline
-        params table in Settings (important for small Ollama models
-        that need ``num_predict`` / ``top_k`` / ``repeat_penalty`` etc.)
+    Model params come from one of two disjoint namespaces, so the reranker
+    can never overwrite the main model's params (issue #30):
+      - Inherited model (no override) → the main model's params from
+        ``cfg.model_params`` (handles provider quirks like Moonshot's locked
+        ``temperature=1``)
+      - Override model → the reranker's own ``cfg.rerank_params`` (important
+        for small Ollama models that need ``num_predict`` / ``top_k`` /
+        ``repeat_penalty`` etc.)
     """
     from ..llm.client import LLMClient
     provider_name = cfg.rerank_llm_provider_name or cfg.provider.name
@@ -37,9 +37,10 @@ def _build_rerank_llm_client(cfg):
     api_key = cfg.rerank_llm_api_key or cfg.provider.api_key
     model = cfg.rerank_llm_model or cfg.provider.model
 
-    # Always look up params for the effective model — sharing the main
-    # model_params dict keeps params coherent across main/reranker usage.
-    model_params = dict(cfg.model_params.get(model, {}))
+    if cfg.rerank_llm_model:  # override → reranker's own param namespace
+        model_params = dict(cfg.rerank_params)
+    else:  # inherit → use the main model's params
+        model_params = dict(cfg.model_params.get(model, {}))
 
     return LLMClient(
         provider_name=provider_name,

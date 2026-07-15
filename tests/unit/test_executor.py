@@ -255,6 +255,99 @@ class TestSandboxTimeout:
         )
 
 
+class TestSandboxHarnessForcesExit:
+    """Issue #14: the sandbox harness wrote its result file but never forced the
+    interpreter to exit. On FreeCAD builds where running a script via `-c`
+    against an OPENED document leaves the process in interactive mode (the
+    Qt/console event loop never returns), the subprocess never terminated, so
+    `subprocess.run()` blocked until its timeout and the sandbox reported a
+    spurious "code timed out" — even for trivial code.
+
+    The hang itself is build-/timing-dependent and not reliably reproducible in
+    CI, so this guards the invariant instead: the generated harness must force a
+    process exit after writing its result. Diagnosed and first patched by
+    @galberding on the issue thread.
+    """
+
+    def test_generated_harness_forces_process_exit(self):
+        captured = {}
+
+        class _FakeProc:
+            returncode = 0
+
+        def _fake_run(cmd, **kwargs):
+            # cmd == [freecad_bin, "-c", script_file]; capture the harness the
+            # sandbox wrote before it would have run FreeCAD.
+            with open(cmd[2]) as fh:
+                captured["harness"] = fh.read()
+            return _FakeProc()
+
+        with patch(
+            "freecad_ai.core.executor._find_freecad_cmd",
+            return_value="/usr/bin/freecadcmd",
+        ):
+            with patch(
+                "freecad_ai.core.executor.subprocess.run", side_effect=_fake_run
+            ):
+                executor._sandbox_test("x = 1", timeout=5)
+
+        harness = captured.get("harness", "")
+        assert harness, "sandbox did not generate a harness script"
+        forces_exit = any(
+            tok in harness for tok in ("os._exit(", "sys.exit(")
+        )
+        assert forces_exit, (
+            "sandbox harness must force the interpreter to exit after writing "
+            "its result, or the FreeCAD subprocess can hang until timeout "
+            "(issue #14)"
+        )
+
+
+class TestConfigurableExecutionTimeout:
+    """Issue #14 (reopened): the execution timeout was hardcoded at 30s with no
+    user override, so heavy-but-valid operations — scaling a detailed model via
+    Shape.transformGeometry, whose cost is O(geometry complexity) — exceeded 30s
+    and failed on BOTH the sandbox dry-run and the live SIGALRM path. The timeout
+    is now sourced from AppConfig.execution_timeout (default 60) whenever the
+    caller passes no explicit timeout, so users can raise it for big models.
+    """
+
+    def _captured_timeout(self, configured):
+        from freecad_ai.config import AppConfig
+
+        seen = {}
+
+        def _capture(code, timeout=15, document_path=None):
+            seen["timeout"] = timeout
+            return True, ""
+
+        cfg = AppConfig()
+        if configured is not None:
+            cfg.execution_timeout = configured
+
+        with patch("freecad_ai.config.get_config", return_value=cfg):
+            with patch(
+                "freecad_ai.core.executor._sandbox_test", side_effect=_capture
+            ):
+                with patch(
+                    "freecad_ai.core.active_document.get_synced_active_document",
+                    return_value=None,
+                ):
+                    executor.execute_code("x = 1")  # no explicit timeout
+        return seen["timeout"]
+
+    def test_default_execution_timeout_is_30(self):
+        assert self._captured_timeout(None) == 30, (
+            "execute_code() with no explicit timeout must use the 30s default"
+        )
+
+    def test_configured_execution_timeout_is_honored(self):
+        assert self._captured_timeout(120) == 120, (
+            "execute_code() must source its timeout from "
+            "AppConfig.execution_timeout when the caller passes none"
+        )
+
+
 class TestCollectObjectIssues:
     """Post-execution validation must blame the code only for shapes it
     created or newly broke — never for objects that were already invalid
@@ -326,3 +419,53 @@ class TestCollectObjectIssues:
         ]
         issues = executor._collect_object_issues(objects_state, set())
         assert issues == []
+
+    def test_empty_sketch_null_shape_is_not_reported(self):
+        # Issue #18 follow-up: "create a sketch on the selected face" makes an
+        # empty sketch (geometry is added later in the editor). On FreeCAD 1.1
+        # an empty Sketcher::SketchObject reports Shape.isNull() == True while
+        # State stays "Up-to-date" — a valid, complete intermediate state. The
+        # validator must not flag it; otherwise the model injects junk
+        # placeholder geometry to defeat the false positive.
+        objects_state = [
+            {"name": "Sketch_Face1996", "type": "Sketcher::SketchObject",
+             "null": True, "invalid": False, "invalid_state": False},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == [], (
+            "an empty but valid sketch (null shape, Up-to-date) must not be "
+            "reported as broken"
+        )
+
+    def test_empty_body_null_shape_is_not_reported(self):
+        # A PartDesign::Body before its first feature also has a null shape
+        # while Up-to-date — same benign null as an empty sketch.
+        objects_state = [
+            {"name": "Body", "type": "PartDesign::Body",
+             "null": True, "invalid": False, "invalid_state": False},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == []
+
+    def test_failed_sketch_attachment_still_reported(self):
+        # Safety net: a sketch whose attachment did not resolve lands in an
+        # Invalid state (null shape AND invalid_state). The null-shape
+        # exemption for sketches must NOT swallow this — the separate
+        # invalid_state report still catches the genuine failure.
+        objects_state = [
+            {"name": "Sketch", "type": "Sketcher::SketchObject",
+             "null": True, "invalid": False, "invalid_state": True},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == ["Object 'Sketch' is in Invalid state"]
+
+    def test_null_shape_on_non_exempt_new_object_still_reported(self):
+        # A solid-producing feature (e.g. a Pad) that silently builds nothing
+        # is a real defect and must still be reported — the exemption is
+        # narrow, keyed on object type.
+        objects_state = [
+            {"name": "Pad", "type": "PartDesign::Pad",
+             "null": True, "invalid": False, "invalid_state": False},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == ["Object 'Pad' has null shape"]
