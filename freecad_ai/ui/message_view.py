@@ -352,15 +352,47 @@ def render_message(role: str, content, palette=None) -> str:
         _RENDER_PALETTE = old_palette
 
 
-def render_code_block(code: str, language: str = "python", palette=None) -> str:
-    """Render a code block as a standalone HTML element with a copy-friendly format."""
+def render_code_block(code: str, language: str = "python", palette=None,
+                      actions: bool = True) -> str:
+    """Render a code block with a header bar: language + action links.
+
+    The action links reuse the existing anchor scheme handled by
+    ``_handle_anchor_click``: ``copy:`` puts the code on the clipboard,
+    ``execute:`` opens the Code Review dialog before running it.
+    """
+    import base64
+
     colors = _resolve_colors(palette)
     escaped = html.escape(code.strip())
+
+    if actions:
+        encoded = base64.b64encode(code.strip().encode()).decode()
+        copy_lbl = translate("MessageView", "Copy")
+        run_lbl = translate("MessageView", "Review &amp; Run")
+        actions_html = (
+            f'<a href="copy:{encoded}" style="text-decoration: none; '
+            f'color: {colors["code_lang"]};">{copy_lbl}</a>'
+            f'&nbsp;&nbsp;'
+            f'<a href="execute:{encoded}" style="text-decoration: none; '
+            f'color: {colors["tool_success_text"]};">{run_lbl}</a>'
+        )
+    else:
+        actions_html = ""
+
+    # QTextBrowser has no flexbox — a two-cell table right-aligns the actions.
+    header = (
+        f'<table width="100%" cellpadding="0" cellspacing="0" '
+        f'style="background-color: {colors["code_lang_bg"]}; font-size: 11px;">'
+        f'<tr>'
+        f'<td style="padding: 2px 8px; color: {colors["code_lang"]};">{language}</td>'
+        f'<td align="right" style="padding: 2px 8px;">{actions_html}</td>'
+        f'</tr></table>'
+    )
+
     return (
         f'<div style="margin: 6px 0; background-color: {colors["code_bg"]}; '
         f'border: 1px solid {colors["code_border"]}; border-radius: 4px; padding: 2px 0;">'
-        f'<div style="padding: 2px 8px; font-size: 11px; color: {colors["code_lang"]}; '
-        f'background-color: {colors["code_lang_bg"]};">{language}</div>'
+        f'{header}'
         f'<pre style="margin: 0; padding: 8px; color: {colors["code_text"]}; '
         f'font-family: monospace; font-size: 13px; overflow-x: auto;">'
         f'{escaped}</pre></div>'
@@ -408,9 +440,26 @@ def render_execution_result(success: bool, stdout: str, stderr: str, palette=Non
     return "".join(parts)
 
 
+def _format_elapsed(elapsed: float) -> str:
+    """Format a duration in seconds as a compact human string."""
+    ms = elapsed * 1000
+    if ms >= 1000:
+        return f"{elapsed:.1f}s"
+    return f"{ms:.0f}ms"
+
+
 def render_tool_call(tool_name: str, call_id: str, started: bool = True,
-                     success: bool = True, output: str = "", palette=None) -> str:
+                     success: bool = True, output: str = "", palette=None,
+                     elapsed: float = None, args_summary: str = "",
+                     detail_anchor: str = "") -> str:
     """Render a tool call indicator in the chat.
+
+    Completed calls render as a single compact line — status icon, tool
+    name, argument summary, duration — instead of dumping the raw output.
+    The full output stays reachable through ``detail_anchor`` (an anchor
+    href such as ``tooldetail:<call_id>`` handled by the chat's
+    anchorClicked handler). When no anchor is given, the legacy truncated
+    output block is kept for callers that have nothing to link to.
 
     Args:
         tool_name: Name of the tool being called
@@ -418,6 +467,9 @@ def render_tool_call(tool_name: str, call_id: str, started: bool = True,
         started: True for "calling..." state, False for completed
         success: Whether the tool call succeeded (only used when started=False)
         output: Tool result output (only used when started=False)
+        elapsed: Execution duration in seconds (optional)
+        args_summary: One-line summary of the call arguments (optional)
+        detail_anchor: Anchor href opening the full output (optional)
     """
     colors = _resolve_colors(palette)
 
@@ -444,16 +496,37 @@ def render_tool_call(tool_name: str, call_id: str, started: bool = True,
             bg = colors["tool_error_bg"]
             border_color = colors["tool_error_border"]
 
+        meta_parts = []
+        if args_summary:
+            summary = args_summary
+            if len(summary) > 80:
+                summary = summary[:80] + "…"
+            meta_parts.append(html.escape(summary))
+        if elapsed is not None:
+            meta_parts.append(_format_elapsed(elapsed))
+        if detail_anchor:
+            detail_lbl = translate("MessageView", "details")
+            meta_parts.append(
+                f'<a href="{detail_anchor}" style="text-decoration: none; '
+                f'color: {colors["code_lang"]};">{detail_lbl}</a>')
+        meta_html = ""
+        if meta_parts:
+            sep = f' <span style="color: {colors["thinking_text"]};">&middot;</span> '
+            meta_html = (
+                f' <span style="color: {colors["thinking_text"]};">'
+                + sep.join(meta_parts) + '</span>')
+
         parts = [
-            f'<div style="margin: 4px 0; padding: 6px 10px; '
+            f'<div style="margin: 4px 0; padding: 4px 10px; '
             f'background-color: {bg}; border-left: 3px solid {border_color}; '
             f'border-radius: 0 4px 4px 0; font-size: 12px;">'
             f'<span style="color: {color};">{icon} <b>{html.escape(tool_name)}</b></span>'
+            f'{meta_html}'
         ]
 
-        if output:
+        # Legacy fallback: no anchor to point to → keep the truncated dump.
+        if output and not detail_anchor:
             escaped_output = html.escape(output.strip())
-            # Truncate very long output
             if len(escaped_output) > 500:
                 escaped_output = escaped_output[:500] + "..."
             parts.append(

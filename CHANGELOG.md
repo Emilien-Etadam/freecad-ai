@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Compact tool-call lines in the chat** (`freecad_ai/ui/message_view.py`, `freecad_ai/ui/chat_dock/streaming.py`, `freecad_ai/ui/chat_dock/display.py`, `freecad_ai/ui/chat_workers.py`). A completed tool call now renders as a single line — status icon, tool name, argument summary, execution duration — instead of dumping the raw output into the conversation. The full output stays reachable through a "details" link that opens a read-only dialog. The worker's `tool_call_finished` signal carries the elapsed time and the call arguments; the history re-render path uses the same compact line (inferring success from the stored result) instead of the old `Called with: {json}` dump.
+- **Code blocks carry a Copy / Review & Run action bar** (`freecad_ai/ui/message_view.py`). Every fenced code block rendered in the chat gets a header with the language on the left and two anchor actions on the right: Copy puts the code on the clipboard, Review & Run opens the existing Code Review dialog before executing — same anchors as the Plan-mode buttons, now available on the block itself.
+- **Activity indicator shows a streamed-token estimate** (`freecad_ai/ui/chat_dock/streaming.py`, `freecad_ai/ui/chat_dock/display.py`). While the model streams, the footer activity label appends `· ~N tok` (chars/4, reset on each send) — a live feel for generation speed, especially useful against a local vLLM/Ollama server.
+
 ### Fixed
+
+- **Image thumbnail dialog crashed on unqualified Qt names** (`freecad_ai/ui/chat_dock/display.py`). `_show_image_dialog` referenced `QVBoxLayout` and `QLabel` without importing them, raising `NameError` when clicking a chat image thumbnail; both now go through `QtWidgets`.
 
 - **Send appeared to do nothing after clicking the button** (`freecad_ai/ui/chat_dock/send.py`). MCP connection and LLM tool reranking ran on the main thread *before* the loading indicator appeared, freezing the UI for up to two minutes with no feedback. Loading/stream UI now shows immediately; setup errors are surfaced in chat and the Report View. The reranker LLM client uses a 30 s HTTP timeout so a dead provider falls back to keyword reranking quickly.
 

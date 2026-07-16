@@ -2,6 +2,45 @@
 
 from .chat_constants import _BINARY_MAGIC
 
+
+def _summarize_tool_args(arguments, max_len: int = 80) -> str:
+    """One-line ``key=value`` summary of tool-call arguments.
+
+    Accepts a dict or a JSON string. Long values are shortened and nested
+    structures collapsed, so the summary stays scannable in the compact
+    tool-call line. Returns "" when there is nothing meaningful to show.
+    """
+    import json
+
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except (ValueError, TypeError):
+            return ""
+    if not isinstance(arguments, dict) or not arguments:
+        return ""
+
+    parts = []
+    for key, value in arguments.items():
+        if isinstance(value, str):
+            text = value if len(value) <= 24 else value[:24] + "…"
+        elif isinstance(value, (int, float, bool)) or value is None:
+            text = str(value)
+        elif isinstance(value, list):
+            text = f"[{len(value)} items]"
+        elif isinstance(value, dict):
+            text = "{…}"
+        else:
+            text = str(type(value).__name__)
+        parts.append(f"{key}={text}")
+        if sum(len(p) for p in parts) > max_len:
+            break
+
+    summary = ", ".join(parts)
+    if len(summary) > max_len:
+        summary = summary[:max_len] + "…"
+    return summary
+
 def _is_binary_content(data: bytes) -> bool:
     """Detect binary content by magic bytes and null-byte presence."""
     header = data[:8]

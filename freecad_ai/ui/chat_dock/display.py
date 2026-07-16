@@ -41,8 +41,20 @@ class ChatDockDisplayMixin:
     def _rerender_chat(self):
         """Re-render the entire chat history with proper formatting."""
         try:
+            from ..chat_utils import _summarize_tool_args
+
             html_parts = []
             mode = "plan" if self.mode_combo.currentIndex() == 0 else "act"
+
+            # Map tool_call_id → result content so compact lines can infer
+            # success and offer a "details" anchor after a re-render.
+            results_by_id = {
+                m["tool_call_id"]: m.get("content", "")
+                for m in self.conversation.messages
+                if m.get("role") == "tool_result" and m.get("tool_call_id")
+            }
+            if not hasattr(self, "_tool_call_details"):
+                self._tool_call_details = {}
 
             for msg in self.conversation.messages:
                 if msg["role"] == "tool_result":
@@ -53,9 +65,17 @@ class ChatDockDisplayMixin:
                     if msg.get("content"):
                         html_parts.append(self._render_message("assistant", msg["content"]))
                     for tc in msg["tool_calls"]:
+                        result = results_by_id.get(tc["id"], "")
+                        detail_anchor = ""
+                        if isinstance(result, str) and result.strip():
+                            self._tool_call_details[tc["id"]] = result
+                            detail_anchor = f"tooldetail:{tc['id']}"
+                        success = not (isinstance(result, str)
+                                       and result.startswith("Error:"))
                         html_parts.append(self._render_tool_call(
-                            tc["name"], tc["id"], started=False, success=True,
-                            output=f"Called with: {json.dumps(tc['arguments'], indent=2)}"
+                            tc["name"], tc["id"], started=False, success=success,
+                            args_summary=_summarize_tool_args(tc.get("arguments")),
+                            detail_anchor=detail_anchor,
                         ))
                 else:
                     html_parts.append(self._render_message(msg["role"], msg.get("content", "")))
@@ -86,6 +106,9 @@ class ChatDockDisplayMixin:
         if url_str.startswith("image:"):
             self._show_image_dialog(url_str)
             return
+        elif url_str.startswith("tooldetail:"):
+            self._show_tool_detail_dialog(url_str[len("tooldetail:"):])
+            return
         elif url_str.startswith("execute:"):
             encoded = url_str[8:]
             try:
@@ -101,6 +124,26 @@ class ChatDockDisplayMixin:
                 clipboard.setText(code)
             except Exception:
                 pass
+
+    def _show_tool_detail_dialog(self, call_id: str):
+        """Show the full output of a tool call in a read-only dialog."""
+        detail = getattr(self, "_tool_call_details", {}).get(call_id)
+        if not detail:
+            return
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle(translate("ChatDockWidget", "Tool output"))
+        layout = QtWidgets.QVBoxLayout(dlg)
+        view = QtWidgets.QPlainTextEdit(detail)
+        view.setReadOnly(True)
+        from ..theme_palette import qtextedit_palette_stylesheet
+        view.setStyleSheet(qtextedit_palette_stylesheet(self.palette()).replace(
+            "QTextEdit", "QPlainTextEdit"))
+        layout.addWidget(view)
+        close_btn = QtWidgets.QPushButton(translate("ChatDockWidget", "Close"))
+        close_btn.clicked.connect(dlg.accept)
+        layout.addWidget(close_btn)
+        dlg.resize(560, 400)
+        dlg.show()
 
     def _show_image_dialog(self, url_str: str):
         """Show a full-size image in a dialog when a thumbnail is clicked."""
@@ -124,8 +167,8 @@ class ChatDockDisplayMixin:
 
                     dlg = QtWidgets.QDialog(self)
                     dlg.setWindowTitle("Image")
-                    dlg_layout = QVBoxLayout(dlg)
-                    label = QLabel()
+                    dlg_layout = QtWidgets.QVBoxLayout(dlg)
+                    label = QtWidgets.QLabel()
                     # Scale down if very large
                     try:
                         screen_size = QtWidgets.QApplication.primaryScreen().availableGeometry()
@@ -192,7 +235,16 @@ class ChatDockDisplayMixin:
             return
         dots = "." * ((getattr(self, "_activity_tick", 0) % 3) + 1)
         self._activity_tick = getattr(self, "_activity_tick", 0) + 1
-        self.activity_label.setText(getattr(self, "_activity_base_text", "") + dots)
+        text = getattr(self, "_activity_base_text", "") + dots
+        # Streamed-token estimate (chars/4) — handy for gauging a local
+        # model's generation speed at a glance.
+        tokens = getattr(self, "_stream_chars", 0) // 4
+        if tokens > 0:
+            if tokens >= 1000:
+                text += f" · ~{tokens / 1000:.1f}k tok"
+            else:
+                text += f" · ~{tokens} tok"
+        self.activity_label.setText(text)
 
 
     def _set_loading(self, loading):
@@ -201,6 +253,7 @@ class ChatDockDisplayMixin:
         self.send_btn.setEnabled(True)
         self.input_edit.setReadOnly(loading)
         if loading:
+            self._stream_chars = 0
             self.send_btn.setText("Stop")
             self.send_btn.setStyleSheet(pushbutton_loading_stylesheet(self.palette()))
         else:

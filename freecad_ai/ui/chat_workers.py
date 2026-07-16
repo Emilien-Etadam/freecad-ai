@@ -41,7 +41,8 @@ class _LLMWorker(QThread):
     response_finished = Signal(str)        # Full response text (final turn only)
     error_occurred = Signal(str)           # Error message
     tool_call_started = Signal(str, str)   # (tool_name, call_id)
-    tool_call_finished = Signal(str, str, bool, str)  # (tool_name, call_id, success, output)
+    # (tool_name, call_id, success, output, elapsed_seconds, arguments_json)
+    tool_call_finished = Signal(str, str, bool, str, float, str)
     tool_exec_requested = Signal(str, str) # (tool_name, arguments_json) — dispatches to main thread
     vision_note = Signal(str)              # Vision description status note
 
@@ -234,7 +235,12 @@ class _LLMWorker(QThread):
                     "elapsed": elapsed, "turn": turn,
                 })
 
-                self.tool_call_finished.emit(tc.name, tc.id, success, result_text)
+                try:
+                    args_json = json.dumps(tc.arguments)
+                except (TypeError, ValueError):
+                    args_json = "{}"
+                self.tool_call_finished.emit(
+                    tc.name, tc.id, success, result_text, elapsed, args_json)
 
                 # Post-tool-use hook
                 _fire_hook("post_tool_use", {
