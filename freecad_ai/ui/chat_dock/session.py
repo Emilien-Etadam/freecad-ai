@@ -41,6 +41,9 @@ class ChatDockSessionMixin:
             get_mcp_manager().disconnect_all()
         self._ensure_vision_fallback()
         self._refresh_image_controls()
+        # Provider/model or context window may have changed
+        self._update_provider_chip()
+        self._update_context_gauge()
 
     def _new_chat(self):
         """Start a new conversation."""

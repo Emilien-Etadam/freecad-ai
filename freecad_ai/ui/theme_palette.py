@@ -56,6 +56,23 @@ def pushbutton_loading_stylesheet(palette, *, padding="8px 16px"):
     )
 
 
+def progressbar_gauge_stylesheet(palette, *, chunk_color=None, height=4):
+    """Flat thin gauge (context usage): no border, no text, palette fill.
+
+    The fill uses the Highlight role unless an explicit semantic color is
+    given (e.g. a warning color as the gauge approaches the compaction
+    threshold).
+    """
+    fill = chunk_color or palette_color_name(palette, QPalette.Highlight)
+    return (
+        "QProgressBar { "
+        f"background-color: {palette_color_name(palette, QPalette.Mid)}; "
+        f"border: none; max-height: {height}px; min-height: {height}px; }} "
+        "QProgressBar::chunk { "
+        f"background-color: {fill}; }}"
+    )
+
+
 def label_muted_stylesheet(palette):
     """Muted helper/status label."""
     return f"color: {palette_color_name(palette, QPalette.PlaceholderText)};"
