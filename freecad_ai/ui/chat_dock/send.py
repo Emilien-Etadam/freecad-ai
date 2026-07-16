@@ -95,7 +95,8 @@ class ChatDockSendMixin:
         self.conversation.add_user_message(text, images=images, documents=documents)
         self._refresh_input_history()
         display_content = self.conversation.messages[-1]["content"]
-        self._append_html(self._render_message("user", display_content))
+        self._append_html(self._render_message(
+            "user", display_content, ts=self.conversation.messages[-1].get("ts")))
         self._attachment_strip.clear()
 
         # Check if conversation needs compaction
@@ -184,7 +185,9 @@ class ChatDockSendMixin:
         self._summary_rendered = False
         cfg = get_config()
         hint_kind = "thinking" if cfg.thinking != "off" else "connecting"
-        self._append_html(render_assistant_stream_open(palette=self.palette()))
+        import time as _time
+        self._append_html(render_assistant_stream_open(
+            palette=self.palette(), ts=_time.time()))
         self._append_html(render_stream_activity_hint(self.palette(), hint_kind))
         self._set_chat_activity(
             "think" if cfg.thinking != "off" else "connect",

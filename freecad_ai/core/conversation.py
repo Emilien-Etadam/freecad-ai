@@ -56,13 +56,15 @@ class Conversation:
                     "text": f"--- Attached file: {doc['filename']} ---\n{doc['text']}",
                 })
             blocks.extend(images or [])
-            self.messages.append({"role": "user", "content": blocks})
+            self.messages.append(
+                {"role": "user", "content": blocks, "ts": time.time()})
         else:
-            self.messages.append({"role": "user", "content": content})
+            self.messages.append(
+                {"role": "user", "content": content, "ts": time.time()})
 
     def add_assistant_message(self, content: str, tool_calls: list[dict] | None = None):
         """Add an assistant message, optionally with tool calls."""
-        msg = {"role": "assistant", "content": content}
+        msg = {"role": "assistant", "content": content, "ts": time.time()}
         if tool_calls:
             msg["tool_calls"] = tool_calls
         self.messages.append(msg)
@@ -87,9 +89,11 @@ class Conversation:
         if images:
             blocks = [{"type": "text", "text": prefixed}]
             blocks.extend(images)
-            self.messages.append({"role": "user", "content": blocks})
+            self.messages.append(
+                {"role": "user", "content": blocks, "ts": time.time()})
         else:
-            self.messages.append({"role": "user", "content": prefixed})
+            self.messages.append(
+                {"role": "user", "content": prefixed, "ts": time.time()})
 
     def get_messages_for_api(self, max_chars: int = 100000,
                              api_style: str = "openai",

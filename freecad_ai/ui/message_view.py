@@ -273,15 +273,40 @@ def get_chat_display_stylesheet(palette=None) -> str:
 
 
 
-def _chat_message_html(role, label, label_color, bg_color, body_html, palette=None, *, open_content=False):
+def _format_timestamp(ts) -> str:
+    """Format a Unix timestamp as a short HH:MM string ('' if falsy)."""
+    if not ts:
+        return ""
+    import time as time_mod
+    try:
+        return time_mod.strftime("%H:%M", time_mod.localtime(ts))
+    except (ValueError, OverflowError, OSError):
+        return ""
+
+
+def _chat_message_html(role, label, label_color, bg_color, body_html, palette=None, *,
+                       open_content=False, ts=None):
     """Chat bubble via HTML tables (QTextBrowser ignores most CSS flex/float)."""
     colors = _resolve_colors(palette)
     text_color = colors.get("chat_text", "#e0e0e0")
-    safe_label = html.escape(label)
-    label_para = (
-        f'<p style="margin:0 0 8px 0; color:{label_color}; font-weight:bold; '
-        f'font-size:9pt;">{safe_label}</p>'
-    )
+    safe_label = html.escape(label).upper()
+    time_str = _format_timestamp(ts)
+    if time_str:
+        # One-row table right-aligns the discreet timestamp next to the label.
+        label_para = (
+            '<table width="100%" cellspacing="0" cellpadding="0" '
+            'style="margin:0 0 8px 0;"><tr>'
+            f'<td style="color:{label_color}; font-weight:bold; '
+            f'font-size:8pt;">{safe_label}</td>'
+            f'<td align="right" style="color:{colors["thinking_label"]}; '
+            f'font-size:8pt;">{time_str}</td>'
+            '</tr></table>'
+        )
+    else:
+        label_para = (
+            f'<p style="margin:0 0 8px 0; color:{label_color}; font-weight:bold; '
+            f'font-size:8pt;">{safe_label}</p>'
+        )
     body_open = f'<p style="margin:0; color:{text_color};">'
 
     if role == "user":
@@ -322,7 +347,7 @@ def _chat_message_html(role, label, label_color, bg_color, body_html, palette=No
 CHAT_STREAM_END = '</p></td><td width="26%"></td></tr></table>'
 
 
-def render_message(role: str, content, palette=None) -> str:
+def render_message(role: str, content, palette=None, ts=None) -> str:
     """Render a single chat message as an HTML block."""
     global _RENDER_PALETTE
     old_palette = _RENDER_PALETTE
@@ -347,6 +372,7 @@ def render_message(role: str, content, palette=None) -> str:
             formatted_content = _format_content(content)
         return _chat_message_html(
             role, label, label_color, bg_color, formatted_content, palette=palette,
+            ts=ts,
         )
     finally:
         _RENDER_PALETTE = old_palette
@@ -609,11 +635,58 @@ def render_tool_summary(timeline: list[dict], palette=None) -> str:
     )
 
 
-def _render_thinking_block(thinking_text: str, palette=None) -> str:
-    """Render a <think> block as a dimmed, collapsible-style block."""
+# Digests of thinking blocks the user expanded (anchor "thinktoggle:<digest>").
+# Session-scoped: a fresh FreeCAD start collapses everything again.
+_EXPANDED_THINK_IDS = set()
+
+
+def think_block_digest(thinking_text: str) -> str:
+    """Stable short ID for a thinking block (used by the expand anchor)."""
+    import hashlib
+    return hashlib.md5(thinking_text.strip().encode("utf-8")).hexdigest()[:12]
+
+
+def toggle_think_block(digest: str) -> None:
+    """Flip a thinking block between collapsed and expanded."""
+    if digest in _EXPANDED_THINK_IDS:
+        _EXPANDED_THINK_IDS.discard(digest)
+    else:
+        _EXPANDED_THINK_IDS.add(digest)
+
+
+def render_thinking_block(thinking_text: str, palette=None) -> str:
+    """Render a thinking/reasoning block, collapsed to one line by default.
+
+    Collapsed: '▸ Thinking (N words)' — the whole line is a
+    ``thinktoggle:<digest>`` anchor that expands it (handled by the chat's
+    anchorClicked handler, which re-renders in place). Expanded: '▾' header
+    plus the dimmed italic text, same anchor to collapse again.
+    """
     colors = _resolve_colors(palette)
 
-    escaped = html.escape(thinking_text.strip())
+    text = thinking_text.strip()
+    if not text:
+        return ""
+    digest = think_block_digest(text)
+    words = len(text.split())
+    label = translate("MessageView", "Thinking")
+    count = translate("MessageView", "({} words)").format(words)
+    expanded = digest in _EXPANDED_THINK_IDS
+    arrow = "&#9662;" if expanded else "&#9656;"  # ▾ / ▸
+
+    header = (
+        f'<a href="thinktoggle:{digest}" style="text-decoration: none; '
+        f'color: {colors["thinking_label"]};">{arrow} {label} '
+        f'<span style="color: {colors["thinking_text"]};">{count}</span></a>'
+    )
+
+    if not expanded:
+        return (
+            f'<div style="margin: 4px 0; padding: 4px 8px; '
+            f'font-size: 11px;">{header}</div>'
+        )
+
+    escaped = html.escape(text)
     # Truncate very long thinking
     if len(escaped) > 2000:
         escaped = escaped[:2000] + "..."
@@ -622,11 +695,13 @@ def _render_thinking_block(thinking_text: str, palette=None) -> str:
         f'background-color: {colors["thinking_bg"]}; '
         f'border-left: 2px solid {colors["thinking_border"]}; '
         f'font-size: 11px; color: {colors["thinking_text"]}; font-style: italic;">'
-        f'<span style="color: {colors["thinking_label"]};">{{label}}</span><br>'
-        '{text}</div>'.format(
-            label=translate("MessageView", "Thinking"),
-            text=escaped)
+        f'{header}<br>'
+        f'{escaped}</div>'
     )
+
+
+# Backward-compatible alias (pre-collapse name).
+_render_thinking_block = render_thinking_block
 
 
 def _format_content_blocks(blocks: list) -> str:
@@ -761,7 +836,7 @@ def render_stream_activity_hint(palette=None, kind: str = "connecting") -> str:
     )
 
 
-def render_assistant_stream_open(palette=None) -> str:
+def render_assistant_stream_open(palette=None, ts=None) -> str:
     """Open an assistant streaming message container (closes with CHAT_STREAM_END)."""
     colors = _resolve_colors(palette)
     return _chat_message_html(
@@ -772,6 +847,7 @@ def render_assistant_stream_open(palette=None) -> str:
         "",
         palette=palette,
         open_content=True,
+        ts=ts,
     )
 
 

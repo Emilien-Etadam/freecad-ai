@@ -188,9 +188,13 @@ class ChatDockWidget(
 
     # ── Palette-aware HTML wrappers (used by chat_dock mixins) ──
 
-    def _render_message(self, role, content):
+    def _render_message(self, role, content, ts=None):
         from .message_view import render_message
-        return render_message(role, content, palette=self.palette())
+        return render_message(role, content, palette=self.palette(), ts=ts)
+
+    def _render_thinking_block(self, thinking_text):
+        from .message_view import render_thinking_block
+        return render_thinking_block(thinking_text, palette=self.palette())
 
     def _render_tool_call(
         self, tool_name, call_id, started=True, success=True, output="",
