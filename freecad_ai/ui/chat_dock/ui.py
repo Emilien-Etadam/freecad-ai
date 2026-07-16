@@ -44,6 +44,13 @@ class ChatDockUIMixin:
 
         title = QLabel("<b>{}</b>".format(translate("ChatDockWidget", "FreeCAD AI")))
         header.addWidget(title)
+
+        # Provider-status chip: "● provider · model", dot colored by the
+        # state of the last request (see _update_provider_chip).
+        self.provider_chip = QLabel("")
+        self.provider_chip.setTextFormat(Qt.RichText)
+        header.addWidget(self.provider_chip)
+
         header.addStretch()
 
         # Mode toggle
@@ -91,6 +98,15 @@ class ChatDockUIMixin:
         layout.addWidget(self.danger_banner)
 
         layout.addLayout(header)
+
+        # ── Context gauge ──
+        # Thin bar under the header: fill = share of the context window
+        # consumed by the conversation; compaction triggers at 100%.
+        self.context_gauge = QtWidgets.QProgressBar()
+        self.context_gauge.setRange(0, 100)
+        self.context_gauge.setValue(0)
+        self.context_gauge.setTextVisible(False)
+        layout.addWidget(self.context_gauge)
 
         # ── Chat display ──
         self.chat_display = QTextBrowser()
@@ -189,6 +205,9 @@ class ChatDockUIMixin:
         # Sync banner/toggle with current dangerous-mode state
         # (shows banner at startup if dangerous_skip_safety was hand-edited in config.json)
         self._update_danger_banner()
+
+        self._update_provider_chip("idle")
+        self._update_context_gauge()
 
     # ── Dangerous-mode toggle ──────────────────────────────
 
@@ -297,6 +316,8 @@ class ChatDockUIMixin:
         else:
             self.send_btn.setStyleSheet(pushbutton_accent_stylesheet(self.palette()))
         self.token_label.setStyleSheet(f"color: {colors['thinking_text']}; font-size: 11px;")
+        self._update_provider_chip()
+        self._update_context_gauge()
         colors_banner = colors_from_palette(self.palette())
         self.danger_banner.setStyleSheet(
             danger_banner_stylesheet(

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Provider-status chip in the dock header** (`freecad_ai/ui/chat_dock/ui.py`, `freecad_ai/ui/chat_dock/display.py`, `freecad_ai/ui/chat_constants.py`). The header shows "● provider · model" next to the title, with the dot colored by the state of the last request: neutral (nothing sent yet), waiting (connecting), green (last request succeeded), red (last request failed). The state follows the streaming activity phases and refreshes when Settings close, so the active endpoint and its health are visible without opening Settings.
+- **Context-usage gauge under the header** (`freecad_ai/ui/chat_dock/ui.py`, `freecad_ai/ui/chat_dock/display.py`, `freecad_ai/ui/theme_palette.py`). A thin palette-styled bar shows the conversation's estimated tokens over the configured context window (the compaction threshold); the fill switches to the warning color from 80% so compaction never comes as a surprise. Updated wherever the token estimate is (after responses, compaction, new/loaded chats) and themed via a new `progressbar_gauge_stylesheet` helper.
+
 ### Changed
 
 - **Compact tool-call lines in the chat** (`freecad_ai/ui/message_view.py`, `freecad_ai/ui/chat_dock/streaming.py`, `freecad_ai/ui/chat_dock/display.py`, `freecad_ai/ui/chat_workers.py`). A completed tool call now renders as a single line — status icon, tool name, argument summary, execution duration — instead of dumping the raw output into the conversation. The full output stays reachable through a "details" link that opens a read-only dialog. The worker's `tool_call_finished` signal carries the elapsed time and the call arguments; the history re-render path uses the same compact line (inferring success from the stored result) instead of the old `Called with: {json}` dump.

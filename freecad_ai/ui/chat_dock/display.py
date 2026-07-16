@@ -198,6 +198,13 @@ class ChatDockDisplayMixin:
             return
         self._activity_phase = phase or ""
         self._activity_detail = detail or ""
+        # Mirror the connection state onto the provider chip: waiting while
+        # connecting, ok as soon as the model streams anything back.
+        if phase == "connect":
+            self._update_provider_chip("waiting")
+        elif phase in ("think", "respond", "tool"):
+            if getattr(self, "_provider_state", "") != "ok":
+                self._update_provider_chip("ok")
         if phase in ("", "idle"):
             self._ensure_activity_timer()
             self._activity_timer.stop()
@@ -270,6 +277,79 @@ class ChatDockDisplayMixin:
         else:
             self.token_label.setText(
                 translate("ChatDockWidget", "tokens: ~{}").format(tokens))
+        self._update_context_gauge()
+
+    # ── Provider chip & context gauge ───────────────────────
+
+    def _update_provider_chip(self, state=None):
+        """Refresh the header chip: '● provider · model'.
+
+        The dot color reflects the state of the last request (idle /
+        waiting / ok / error, see _PROVIDER_STATE_COLOR_KEYS). Passing a
+        state stores it; passing None re-renders with the stored one
+        (theme refresh, settings change).
+        """
+        if not hasattr(self, "provider_chip"):
+            return
+        import html as html_mod
+        from ..chat_constants import _PROVIDER_STATE_COLOR_KEYS
+        from ..message_view import colors_from_palette
+
+        if state is not None:
+            self._provider_state = state
+        state = getattr(self, "_provider_state", "idle")
+        colors = colors_from_palette(self.palette())
+        dot_color = colors[_PROVIDER_STATE_COLOR_KEYS.get(
+            state, _PROVIDER_STATE_COLOR_KEYS["idle"])]
+
+        cfg = get_config()
+        provider = html_mod.escape(cfg.provider.name or "?")
+        model = cfg.provider.model or ""
+        if len(model) > 28:
+            model = model[:28] + "…"
+        model = html_mod.escape(model)
+        self.provider_chip.setText(
+            f'<span style="color: {dot_color};">&#9679;</span> '
+            f'<span style="color: {colors["thinking_text"]}; font-size: 11px;">'
+            f'{provider} &middot; {model}</span>')
+        state_tips = {
+            "idle": translate("ChatDockWidget", "No request sent yet"),
+            "waiting": translate("ChatDockWidget", "Waiting for the model"),
+            "ok": translate("ChatDockWidget", "Last request succeeded"),
+            "error": translate("ChatDockWidget", "Last request failed"),
+        }
+        self.provider_chip.setToolTip("{}\n{}".format(
+            cfg.provider.base_url or "", state_tips.get(state, "")))
+
+    def _update_context_gauge(self):
+        """Refresh the thin context-usage bar under the header.
+
+        Fill = estimated conversation tokens over the configured context
+        window (the compaction threshold). The fill switches to the
+        warning color from 80% so the user sees compaction coming.
+        """
+        if not hasattr(self, "context_gauge"):
+            return
+        from ..message_view import colors_from_palette
+        from ..theme_palette import progressbar_gauge_stylesheet
+
+        cfg = get_config()
+        window = max(1, int(cfg.context_window))
+        tokens = (self.conversation.estimated_tokens()
+                  if getattr(self, "conversation", None) else 0)
+        pct = min(100, int(tokens * 100 / window))
+        self.context_gauge.setValue(pct)
+
+        chunk_color = None
+        if pct >= 80:
+            chunk_color = colors_from_palette(self.palette())["system_label"]
+        self.context_gauge.setStyleSheet(
+            progressbar_gauge_stylesheet(self.palette(), chunk_color=chunk_color))
+        self.context_gauge.setToolTip(translate(
+            "ChatDockWidget",
+            "Context: ~{tokens} / {window} tokens ({pct}%) — "
+            "older messages are summarized beyond 100%").format(
+                tokens=tokens, window=window, pct=pct))
 
     def _connect_mcp_servers(self, cfg, *, only_deferred=None):
         """Connect to configured MCP servers.

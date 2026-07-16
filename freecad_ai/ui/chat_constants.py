@@ -37,3 +37,11 @@ TEXT_FILE_EXTENSIONS = frozenset({
     "c", "cpp", "h", "hpp", "java", "rs", "go", "rb", "lua",
     "r", "m", "tex", "bib", "svg", "makefile", "dockerfile",
 })
+
+# Provider-status chip: state → theme-color key (message_view color dicts).
+_PROVIDER_STATE_COLOR_KEYS = {
+    "idle": "thinking_text",       # neutral — no request yet
+    "waiting": "system_label",     # connecting / waiting for the model
+    "ok": "tool_success_text",     # last request succeeded
+    "error": "tool_error_text",    # last request failed
+}

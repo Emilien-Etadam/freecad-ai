@@ -117,6 +117,7 @@ class ChatDockStreamingMixin:
     def _on_response_finished(self, full_response):
         """Handle completion of LLM response."""
         self._set_loading(False)
+        self._update_provider_chip("ok")
 
         # Close the streaming div
         cursor = self.chat_display.textCursor()
@@ -277,6 +278,7 @@ class ChatDockStreamingMixin:
         without re-rendering (to keep the streaming HTML intact).
         """
         self._set_loading(False)
+        self._update_provider_chip("error")
 
         # Close the streaming div
         cursor = self.chat_display.textCursor()
