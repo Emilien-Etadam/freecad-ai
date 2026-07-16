@@ -21,7 +21,7 @@ def _chat_widget_facade() -> str:
 
 def test_chat_dock_defines_palette_wrappers():
     body = _chat_widget_facade()
-    assert "return render_message(role, content, palette=self.palette())" in body
+    assert "return render_message(role, content, palette=self.palette(), ts=ts)" in body
     assert "palette=self.palette()" in body.split("def _render_tool_call")[1].split("def _render_execution")[0]
 
 

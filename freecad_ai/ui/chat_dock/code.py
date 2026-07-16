@@ -145,7 +145,8 @@ class ChatDockCodeMixin:
         self.conversation.add_user_message(text, images=pending_images,
                                            documents=pending_docs)
         display_content = self.conversation.messages[-1]["content"]
-        self._append_html(self._render_message("user", display_content))
+        self._append_html(self._render_message(
+            "user", display_content, ts=self.conversation.messages[-1].get("ts")))
         self._attachment_strip.clear()
 
         # Execute the skill

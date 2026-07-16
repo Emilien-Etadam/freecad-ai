@@ -62,8 +62,12 @@ class ChatDockDisplayMixin:
                     continue
                 elif msg["role"] == "assistant" and msg.get("tool_calls"):
                     # Render assistant text + tool call indicators
+                    if msg.get("reasoning_content"):
+                        html_parts.append(
+                            self._render_thinking_block(msg["reasoning_content"]))
                     if msg.get("content"):
-                        html_parts.append(self._render_message("assistant", msg["content"]))
+                        html_parts.append(self._render_message(
+                            "assistant", msg["content"], ts=msg.get("ts")))
                     for tc in msg["tool_calls"]:
                         result = results_by_id.get(tc["id"], "")
                         detail_anchor = ""
@@ -78,7 +82,11 @@ class ChatDockDisplayMixin:
                             detail_anchor=detail_anchor,
                         ))
                 else:
-                    html_parts.append(self._render_message(msg["role"], msg.get("content", "")))
+                    if msg["role"] == "assistant" and msg.get("reasoning_content"):
+                        html_parts.append(
+                            self._render_thinking_block(msg["reasoning_content"]))
+                    html_parts.append(self._render_message(
+                        msg["role"], msg.get("content", ""), ts=msg.get("ts")))
 
                 if mode == "plan" and msg["role"] == "assistant":
                     content = Conversation.extract_text(msg.get("content", ""))
@@ -108,6 +116,16 @@ class ChatDockDisplayMixin:
             return
         elif url_str.startswith("tooldetail:"):
             self._show_tool_detail_dialog(url_str[len("tooldetail:"):])
+            return
+        elif url_str.startswith("thinktoggle:"):
+            from ..message_view import toggle_think_block
+            toggle_think_block(url_str[len("thinktoggle:"):])
+            # Re-render in place, keeping the scroll position so toggling
+            # an old message doesn't jump the view to the bottom.
+            scrollbar = self.chat_display.verticalScrollBar()
+            pos = scrollbar.value()
+            self._rerender_chat()
+            scrollbar.setValue(min(pos, scrollbar.maximum()))
             return
         elif url_str.startswith("execute:"):
             encoded = url_str[8:]
