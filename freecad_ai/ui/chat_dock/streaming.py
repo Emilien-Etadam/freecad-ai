@@ -147,6 +147,25 @@ class ChatDockStreamingMixin:
         # Re-render the full chat to get proper code block formatting
         self._rerender_chat()
 
+        # Empty completion: nothing was stored, so the re-render just wiped
+        # the streamed bubble — never let that be silent. Typical cause: the
+        # output-token budget was entirely consumed by reasoning.
+        if not full_response.strip() and not (self._worker and self._worker._tool_results):
+            thinking = getattr(self._worker, "_thinking_text", "") if self._worker else ""
+            if thinking.strip():
+                self._append_html(self._render_thinking_block(thinking))
+                hint = translate(
+                    "ChatDockWidget",
+                    "The model spent its whole output on reasoning and never "
+                    "produced an answer. Increase Max Tokens in Settings "
+                    "(reasoning counts against it), or set Thinking to Off.")
+            else:
+                hint = translate(
+                    "ChatDockWidget",
+                    "The model returned an empty response. Check the provider "
+                    "and model configuration in Settings.")
+            self._append_html(self._render_message("system", hint))
+
         # Tool call summary (after re-render so it's not wiped)
         if self._worker and self._worker._tool_timeline and not getattr(self, '_summary_rendered', False):
             self._summary_rendered = True
