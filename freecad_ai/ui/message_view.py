@@ -866,10 +866,25 @@ def render_thinking_stream_open(palette=None) -> str:
     )
 
 
+def preserve_edge_spaces(escaped: str) -> str:
+    """Protect leading/trailing spaces of a streamed HTML fragment.
+
+    Each streamed chunk is inserted with its own insertHtml() call, and
+    Qt's rich-text parser trims whitespace at fragment edges — so a chunk
+    boundary falling between two words silently glues them together
+    ("Theuser wantsme"). Hardening the edge spaces as &nbsp; keeps them.
+    """
+    if escaped.startswith(" "):
+        escaped = "&nbsp;" + escaped[1:]
+    if escaped.endswith(" "):
+        escaped = escaped[:-1] + "&nbsp;"
+    return escaped
+
+
 def render_thinking_stream_chunk(chunk: str, palette=None) -> str:
     """Append escaped text to an open thinking stream block."""
     colors = _resolve_colors(palette)
-    escaped = html.escape(chunk).replace("\n", "<br>")
+    escaped = preserve_edge_spaces(html.escape(chunk).replace("\n", "<br>"))
     return (
         f'<span style="color: {colors["thinking_text"]}; font-size: 11px;">'
         f'{escaped}</span>'

@@ -60,6 +60,19 @@ class TestSendNeverSilent:
         assert "Increase Max Tokens" in body     # actionable hint
         assert "empty response" in body          # no-reasoning variant
 
+    def test_streamed_chunks_keep_edge_spaces(self):
+        from freecad_ai.ui.message_view import (
+            preserve_edge_spaces, render_thinking_stream_chunk)
+        assert preserve_edge_spaces(" wants") == "&nbsp;wants"
+        assert preserve_edge_spaces("user ") == "user&nbsp;"
+        assert preserve_edge_spaces(" both ") == "&nbsp;both&nbsp;"
+        assert preserve_edge_spaces("mid dle") == "mid dle"  # inner spaces untouched
+        assert "&nbsp;wants" in render_thinking_stream_chunk(" wants")
+        # The plain-token path goes through the same helper
+        src = (_UI / "chat_dock" / "streaming.py").read_text()
+        token_body = src.split("def _on_token")[1].split("\n    def ")[0]
+        assert "preserve_edge_spaces" in token_body
+
     def test_shutdown_hook_has_no_stray_close_event(self):
         src = (_UI / "chat_dock" / "layout.py").read_text()
         body = src.split("def _mark_shutdown")[1].split("\n    def ")[0]

@@ -29,7 +29,6 @@ class ChatDockStreamingMixin:
     @Slot(str)
     def _on_thinking(self, chunk):
         """Handle a thinking/reasoning delta — render dimmed."""
-        import html as html_mod
         self._stream_chars = getattr(self, "_stream_chars", 0) + len(chunk)
         self._set_chat_activity("think")
         if not self._in_thinking:
@@ -39,9 +38,6 @@ class ChatDockStreamingMixin:
             cursor.movePosition(QTextCursor.End)
             cursor.insertHtml(render_thinking_stream_open(palette=self.palette()))
             self.chat_display.setTextCursor(cursor)
-
-        escaped = html_mod.escape(chunk)
-        escaped = escaped.replace("\n", "<br>")
 
         cursor = self.chat_display.textCursor()
         cursor.movePosition(QTextCursor.End)
@@ -65,8 +61,9 @@ class ChatDockStreamingMixin:
             cursor.insertHtml('</div>')
             self.chat_display.setTextCursor(cursor)
 
-        escaped = html_mod.escape(chunk)
-        escaped = escaped.replace("\n", "<br>")
+        from ..message_view import preserve_edge_spaces
+        escaped = preserve_edge_spaces(
+            html_mod.escape(chunk).replace("\n", "<br>"))
         self._streaming_html += chunk
 
         cursor = self.chat_display.textCursor()
