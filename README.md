@@ -1,8 +1,23 @@
 # FreeCAD AI
 
+[![CI](https://github.com/Emilien-Etadam/freecad-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/Emilien-Etadam/freecad-ai/actions/workflows/ci.yml)
+
 > **Alpha software** — this project is in early development. Expect rough edges, breaking changes, and the occasional FreeCAD crash from LLM-generated code. Use with caution and save your work frequently.
 
 An AI-powered assistant workbench for FreeCAD that generates and executes Python code to create 3D models from natural language descriptions.
+
+## About this fork
+
+This is a fork of [ghbalf/freecad-ai](https://github.com/ghbalf/freecad-ai) (synced with upstream v0.18.0-alpha), tuned for local LLMs (vLLM / Ollama) and carrying its own UI improvements — all derived from the active FreeCAD theme palette:
+
+- **Provider-status chip** in the dock header (`● provider · model`) with a health dot reflecting the last request (waiting / ok / error)
+- **Context gauge** — a thin bar showing conversation tokens vs. the context window, switching to a warning color from 80% so compaction never comes as a surprise
+- **Compact tool-call lines** — status, tool name, argument summary, duration, and a "details" link opening the full output, instead of raw dumps in the conversation
+- **Code-block action bar** — Copy / Review & Run links on every fenced code block (Review & Run goes through the Code Review dialog before executing)
+- **Timestamped bubbles** with lighter role labels, and **thinking blocks collapsed by default** ("▸ Thinking (N words)", expandable in place — stored `reasoning_content` is shown too)
+- **Streamed-token counter** in the activity label (`· ~N tok`) — handy for gauging a local model's generation speed
+- **Refactored internals** — `chat_widget` split into `chat_dock/` mixins, `freecad_tools` split into `tools/handlers/` modules
+- **CI** — every push and PR byte-compiles the sources and runs the unit suite on Python 3.11–3.13
 
 ## Features
 
