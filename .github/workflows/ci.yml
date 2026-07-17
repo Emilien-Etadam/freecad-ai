@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  tests:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # requires-python = ">=3.11" (pyproject.toml); FreeCAD 1.x ships 3.11+
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies
+        run: pip install pytest
+
+      - name: Byte-compile all sources
+        run: python -m compileall -q freecad_ai/ InitGui.py Init.py mcp_server_http.py
+
+      - name: Run unit tests
+        # Integration tests (require a FreeCAD AppImage) are excluded by
+        # the default addopts in pyproject.toml; unit tests run headless.
+        run: python -m pytest tests/unit -q
