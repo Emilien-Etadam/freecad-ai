@@ -20,12 +20,82 @@ Slot = QtCore.Slot
 class ChatDockSendMixin:
 
     def _send_message(self):
-        """Send the current input to the LLM."""
+        """Send the current input to the LLM.
+
+        Never silent: any exception in the send path surfaces as a system
+        bubble + Report View entry instead of dying inside the Qt slot.
+        """
+        try:
+            self._send_message_impl()
+        except Exception as e:
+            err = str(e) or type(e).__name__
+            try:
+                self._set_loading(False)
+            except Exception:
+                pass
+            try:
+                self._append_html(self._render_message(
+                    "system", translate("ChatDockWidget", "Error: ") + err))
+            except Exception:
+                pass
+            try:
+                import traceback
+                import FreeCAD as _App
+                _App.Console.PrintError(
+                    "[FreeCAD AI] Send failed: {}\n".format(traceback.format_exc()))
+            except Exception:
+                pass
+
+    def _detach_stuck_worker(self):
+        """Abandon a worker stuck in a blocked network read.
+
+        requestInterruption() is only honored between stream events — a
+        socket read that never returns ignores it. Disconnect the worker's
+        signals and drop the reference so the user can send again; the
+        orphaned thread exits on its own when its read finally times out.
+        """
+        worker = self._worker
+        for sig, slot in (
+            (worker.token_received, self._on_token),
+            (worker.thinking_received, self._on_thinking),
+            (worker.response_finished, self._on_response_finished),
+            (worker.error_occurred, self._on_error),
+            (worker.tool_call_started, self._on_tool_call_started),
+            (worker.tool_call_finished, self._on_tool_call_finished),
+            (worker.tool_exec_requested, self._execute_tool_call),
+            (worker.vision_note, self._on_vision_note),
+        ):
+            try:
+                sig.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass  # never connected (plan-mode worker) or already gone
+        self._worker = None
+        self._stop_requested = False
+        self._set_loading(False)
+        self._append_html(self._render_message(
+            "system",
+            translate("ChatDockWidget",
+                      "Request abandoned (the server did not answer). "
+                      "You can send again.")))
+
+    def _send_message_impl(self):
         if self._worker and self._worker.isRunning():
             # Button is in "Stop" state — interrupt the in-flight run instead
             # of sending. Input is usually empty here, so this must run before
-            # the empty-text guard below.
+            # the empty-text guard below. Give visible feedback: a blocked
+            # socket read ignores the interruption, and a silent click here
+            # reads as "the button is dead".
             self._worker.requestInterruption()
+            if getattr(self, "_stop_requested", False):
+                # Second click while still stuck → force-detach.
+                self._detach_stuck_worker()
+            else:
+                self._stop_requested = True
+                self._append_html(self._render_message(
+                    "system",
+                    translate("ChatDockWidget",
+                              "Stopping the current request… Click Stop again "
+                              "to abandon it immediately.")))
             return
 
         text = self.input_edit.toPlainText().strip()

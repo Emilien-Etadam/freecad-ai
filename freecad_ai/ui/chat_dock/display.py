@@ -279,6 +279,7 @@ class ChatDockDisplayMixin:
         self.input_edit.setReadOnly(loading)
         if loading:
             self._stream_chars = 0
+            self._stop_requested = False
             self.send_btn.setText("Stop")
             self.send_btn.setStyleSheet(pushbutton_loading_stylesheet(self.palette()))
         else:
