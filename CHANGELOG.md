@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Send path can no longer fail silently** (`freecad_ai/ui/chat_dock/send.py`, `freecad_ai/ui/chat_dock/display.py`). Any exception in `_send_message` now surfaces as a system bubble in the chat plus a full traceback in the Report View, instead of dying inside the Qt slot with no visible effect. Clicking Stop gives visible feedback ("Stopping the current request…"); a second Stop click force-detaches a worker stuck in a blocked network read — a vLLM/Ollama server that accepts the connection but never answers while loading a model would otherwise swallow every subsequent Send click in silence for up to the 300 s timeout. Verified end-to-end against a deliberately unresponsive local server (headless PySide6).
+- **`NameError` on FreeCAD shutdown** (`freecad_ai/ui/chat_dock/layout.py`). `_mark_shutdown` called `super().closeEvent(event)` with an undefined `event` — a leftover from the mixin refactoring; the exception was silently swallowed by the caller's guard.
+
 ### Added
 
 - **GitHub Actions CI** (`.github/workflows/ci.yml`). Every push to `master` and every pull request byte-compiles all sources and runs the unit suite (1045 tests, headless — integration tests requiring a FreeCAD AppImage stay excluded via the default pytest addopts) on Python 3.11, 3.12, and 3.13.
