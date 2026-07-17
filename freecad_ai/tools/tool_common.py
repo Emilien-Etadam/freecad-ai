@@ -9,6 +9,19 @@ import os
 from .registry import ToolParam, ToolDefinition, ToolResult
 from ..core.executor import execute_code
 
+# Handler modules pull these helpers in via ``from ..tool_common import *``.
+# Underscore-prefixed names are NOT star-imported unless listed here — without
+# this list every handler raised NameError on its first `_with_undo` call.
+__all__ = [
+    "ToolParam", "ToolDefinition", "ToolResult", "execute_code", "os",
+    "_coerce_str_list", "_with_undo",
+    "_get_body_plane", "_get_body_axis",
+    "_resolve_sketch_attachment", "_resolve_datum_plane_attachment",
+    "_PLANE_TYPE_IDS", "_classify_support", "_owning_body_name",
+    "_inspect_face", "_inspect_edge", "_read_planar_selection",
+    "_get_object", "_suggest_similar", "_find_body_for",
+]
+
 
 def _coerce_str_list(value):
     """Coerce a stringified list into an actual list.

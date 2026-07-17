@@ -5,6 +5,7 @@ import os
 from ..registry import ToolParam, ToolDefinition, ToolResult
 from ...core.executor import execute_code
 from ..tool_common import *  # noqa: F403
+from .inspection import _resolve_edge_refs, _resolve_face_refs
 
 # ── boolean_operation ───────────────────────────────────────
 
