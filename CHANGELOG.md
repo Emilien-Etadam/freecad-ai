@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **GitHub Actions CI** (`.github/workflows/ci.yml`). Every push to `master` and every pull request byte-compiles all sources and runs the unit suite (1045 tests, headless — integration tests requiring a FreeCAD AppImage stay excluded via the default pytest addopts) on Python 3.11, 3.12, and 3.13.
+
 - **Timestamped chat bubbles** (`freecad_ai/core/conversation.py`, `freecad_ai/ui/message_view.py`, `freecad_ai/ui/chat_dock/`). Messages are stamped at creation (`ts`, internal-only — never sent to the LLM) and every bubble shows a discreet HH:MM next to its role label; labels themselves are lighter (small uppercase) so the content dominates. Live bubbles (the user message you just sent, the streaming assistant reply) are timestamped too.
 - **Thinking blocks collapsed by default** (`freecad_ai/ui/message_view.py`, `freecad_ai/ui/chat_dock/display.py`). Inline `<think>` reasoning and stored `reasoning_content` render as a one-line "▸ Thinking (N words)" header; clicking it expands the dimmed text in place (and back), preserving the scroll position. Reasoning stays visible live while streaming, then folds on the post-response re-render. Stored `reasoning_content` — previously invisible after a re-render — now shows up as a foldable block as well.
 
