@@ -52,6 +52,14 @@ class TestSendNeverSilent:
         loading_body = src.split("def _set_loading")[1].split("\n    def ")[0]
         assert "self._stop_requested = False" in loading_body
 
+    def test_empty_completion_is_never_silent(self):
+        src = (_UI / "chat_dock" / "streaming.py").read_text()
+        body = src.split("def _on_response_finished")[1].split("\n    def ")[0]
+        assert "not full_response.strip()" in body
+        assert "_render_thinking_block" in body  # orphaned reasoning is shown
+        assert "Increase Max Tokens" in body     # actionable hint
+        assert "empty response" in body          # no-reasoning variant
+
     def test_shutdown_hook_has_no_stray_close_event(self):
         src = (_UI / "chat_dock" / "layout.py").read_text()
         body = src.split("def _mark_shutdown")[1].split("\n    def ")[0]
