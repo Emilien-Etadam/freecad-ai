@@ -11,6 +11,8 @@ class ChatDockLayoutMixin:
     """Save/restore dock geometry; detect main-window close."""
 
     def _mark_shutdown(self):
+        # Called from the main-window Close event filter — not a closeEvent
+        # override, so there is no event to forward.
         self._shutting_down = True
         t = getattr(self, "_dock_poll_timer", None)
         if t is not None:
@@ -18,7 +20,6 @@ class ChatDockLayoutMixin:
                 t.stop()
             except Exception:
                 pass
-        super().closeEvent(event)
 
     def _get_main_window(self):
         """Resolve the QMainWindow. self.parent() returns None when floating."""
