@@ -32,10 +32,25 @@ def _coerce_str_list(value):
     return value
 
 
-def _with_undo(label: str, func):
-    """Run func inside a FreeCAD undo transaction. Returns ToolResult."""
-    from ..core.active_document import get_synced_active_document
+def _with_undo(label: str, func, *, create_document_if_missing: bool = False):
+    """Run func inside a FreeCAD undo transaction. Returns ToolResult.
+
+    ``create_document_if_missing`` lets pure-creation tools (first primitive,
+    body, sketch) start from an empty FreeCAD by creating a new document —
+    "make me a die" on a fresh session should just work. Tools that operate
+    on existing geometry keep the explicit error.
+    """
+    from ..core.active_document import (
+        get_synced_active_document, refresh_gui_for_document,
+    )
     doc = get_synced_active_document()
+    if not doc and create_document_if_missing:
+        try:
+            import FreeCAD as App
+            doc = App.newDocument()
+            refresh_gui_for_document(doc)
+        except Exception:
+            doc = None
     if not doc:
         return ToolResult(
             success=False,

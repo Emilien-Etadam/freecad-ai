@@ -326,7 +326,7 @@ def _handle_create_sketch(
                   "fully_constrained": getattr(sketch, "FullyConstrained", None)},
         )
 
-    return _with_undo("Create Sketch", do)
+    return _with_undo("Create Sketch", do, create_document_if_missing=True)
 
 
 CREATE_SKETCH = ToolDefinition(
