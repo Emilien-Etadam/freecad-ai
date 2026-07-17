@@ -101,7 +101,7 @@ def _handle_create_primitive(
                   "body_name": body.Name, "body_label": body.Label},
         )
 
-    return _with_undo(f"Create {shape_type}", do)
+    return _with_undo(f"Create {shape_type}", do, create_document_if_missing=True)
 
 
 CREATE_PRIMITIVE = ToolDefinition(
@@ -146,7 +146,7 @@ def _handle_create_body(
             data={"name": body.Name, "label": body.Label},
         )
 
-    return _with_undo("Create Body", do)
+    return _with_undo("Create Body", do, create_document_if_missing=True)
 
 
 CREATE_BODY = ToolDefinition(
