@@ -1,5 +1,6 @@
 """Stream tokens, tool calls, and post-response validation."""
 import html as html_mod
+import json
 
 from ..compat import QtWidgets, QtCore, QtGui
 from ...i18n import translate
@@ -373,21 +374,38 @@ class ChatDockStreamingMixin:
 
     @Slot(str, str)
     def _execute_tool_call(self, tool_name, arguments_json):
-        """Execute a tool call on the main thread. Connected to worker's tool_exec_requested signal."""
-        if not self._tool_registry:
-            result = {"success": False, "output": "", "error": "No tool registry"}
-        else:
-            try:
-                arguments = json.loads(arguments_json)
-            except json.JSONDecodeError:
-                arguments = {}
-            tool_result = self._tool_registry.execute(tool_name, arguments)
-            result = {
-                "success": tool_result.success,
-                "output": tool_result.output,
-                "error": tool_result.error,
-            }
+        """Execute a tool call on the main thread. Connected to worker's tool_exec_requested signal.
 
-        # Signal the worker thread that the result is ready
+        The worker thread blocks until set_tool_result() is called — so this
+        slot must NEVER die on an exception, or the whole run hangs forever
+        at "Calling <tool>…". Any failure becomes a failed tool result.
+        """
+        try:
+            if not self._tool_registry:
+                result = {"success": False, "output": "", "error": "No tool registry"}
+            else:
+                try:
+                    arguments = json.loads(arguments_json)
+                except json.JSONDecodeError:
+                    arguments = {}
+                tool_result = self._tool_registry.execute(tool_name, arguments)
+                result = {
+                    "success": tool_result.success,
+                    "output": tool_result.output,
+                    "error": tool_result.error,
+                }
+        except Exception as e:
+            import traceback
+            result = {"success": False, "output": "",
+                      "error": "Tool dispatch failed: {}".format(e)}
+            try:
+                import FreeCAD as _App
+                _App.Console.PrintError(
+                    "[FreeCAD AI] Tool dispatch failed: {}\n".format(
+                        traceback.format_exc()))
+            except Exception:
+                pass
+
+        # Signal the worker thread that the result is ready — unconditionally.
         if self._worker:
             self._worker.set_tool_result(result)

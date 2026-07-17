@@ -73,6 +73,28 @@ class TestSendNeverSilent:
         token_body = src.split("def _on_token")[1].split("\n    def ")[0]
         assert "preserve_edge_spaces" in token_body
 
+    def test_tool_dispatch_always_delivers_a_result(self):
+        src = (_UI / "chat_dock" / "streaming.py").read_text()
+        assert "\nimport json\n" in src  # NameError here hung every tool call
+        body = src.split("def _execute_tool_call")[1].split("\n    def ")[0]
+        assert "except Exception" in body
+        assert "Tool dispatch failed" in body
+        assert "set_tool_result(result)" in body
+
+    def test_no_module_uses_stdlib_without_importing_it(self):
+        """A moved method whose import stayed behind hangs or crashes at
+        runtime only (compileall can't catch NameError). Guard the whole
+        ui/ tree for the common stdlib modules."""
+        import re
+        for path in sorted(_UI.rglob("*.py")):
+            src = path.read_text()
+            for mod in ("json", "time", "base64", "hashlib"):
+                if re.search(rf"^(?!.*import).*\b{mod}\.\w", src, re.M):
+                    has_import = re.search(
+                        rf"^\s*(import {mod}\b|from {mod} import"
+                        rf"|import {mod} as)", src, re.M)
+                    assert has_import, f"{path.name} uses {mod}. without importing it"
+
     def test_shutdown_hook_has_no_stray_close_event(self):
         src = (_UI / "chat_dock" / "layout.py").read_text()
         body = src.split("def _mark_shutdown")[1].split("\n    def ")[0]
