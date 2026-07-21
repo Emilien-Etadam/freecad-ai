@@ -179,3 +179,69 @@ class TestSSEClientTransport:
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class TestSSEClientRobustness:
+    def test_stream_survives_idle_beyond_connect_timeout(self):
+        # A short connect timeout must NOT cap the idle stream: after
+        # connecting with connect_timeout=0.5 and sitting idle >0.5s, a
+        # request still round-trips (reader thread stayed alive).
+        with _RunningSSEServer() as srv:
+            t = SSEClientTransport(srv.url, connect_timeout=0.5)
+            t.start()
+            try:
+                time.sleep(1.0)  # idle far beyond connect_timeout
+                assert t.is_alive is True
+                resp = t.send_request("tools/list", timeout=5)
+                assert "result" in resp
+            finally:
+                t.stop()
+
+    def test_inflight_request_fails_fast_on_stream_drop(self):
+        # When the SSE stream dies while a request is in flight, the blocked
+        # send_request returns an error dict promptly (via fail_all), not
+        # after its full timeout.
+        import http.server
+
+        drop = threading.Event()
+        started = threading.Event()
+
+        class Coord(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                self.wfile.write(b"event: endpoint\ndata: /messages\n\n")
+                self.wfile.flush()
+                started.set()
+                drop.wait(5)  # hold the stream open until the POST arrives
+                # returning here closes the SSE stream => EOF for the client
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                self.rfile.read(length)
+                self.send_response(202)
+                self.end_headers()
+                self.wfile.write(b'{"accepted":true}')
+                drop.set()  # kill the SSE stream instead of answering
+
+            def log_message(self, *a):
+                pass
+
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Coord)
+        port = httpd.server_address[1]
+        th = threading.Thread(target=httpd.serve_forever, daemon=True)
+        th.start()
+        try:
+            t = SSEClientTransport(f"http://127.0.0.1:{port}/sse", connect_timeout=5)
+            t.start()
+            assert started.wait(2)
+            begin = time.monotonic()
+            resp = t.send_request("tools/call", {"name": "x"}, timeout=30)
+            elapsed = time.monotonic() - begin
+            assert "error" in resp        # failed fast via fail_all
+            assert elapsed < 5            # well under the 30s request timeout
+            t.stop()
+        finally:
+            httpd.shutdown()
+            httpd.server_close()

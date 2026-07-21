@@ -255,11 +255,13 @@ class SSEClientTransport:
     id via ``_RequestCorrelator``.
     """
 
-    def __init__(self, url, headers=None, *, ssl_context=None, connect_timeout=30):
+    def __init__(self, url, headers=None, *, ssl_context=None,
+                 connect_timeout=30, read_timeout=None):
         self._url = url
         self._headers = dict(headers or {})
         self._ssl_context = ssl_context
         self._connect_timeout = connect_timeout
+        self._read_timeout = read_timeout
         self._correlator = _RequestCorrelator()
         self._resp = None
         self._reader_thread = None
@@ -274,6 +276,7 @@ class SSEClientTransport:
         req.add_header("Accept", "text/event-stream")
         self._resp = urllib.request.urlopen(
             req, timeout=self._connect_timeout, context=self._ssl_context)
+        self._set_stream_timeout(self._read_timeout)
         self._running = True
         self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
         self._reader_thread.start()
@@ -285,6 +288,24 @@ class SSEClientTransport:
         if self._endpoint_url is None:
             self.stop()
             raise RuntimeError(f"MCP SSE stream '{self._url}' closed before handshake")
+
+    def _set_stream_timeout(self, timeout):
+        """Reset the stream socket timeout after the connect phase.
+
+        urllib applies ``connect_timeout`` to the whole socket, which would make
+        an idle SSE stream time out after ``connect_timeout`` seconds. Once the
+        response headers are in (connect is done), switch the socket to
+        ``read_timeout`` (None = block, no idle cap) so a quiet-but-healthy
+        stream is not killed. Best-effort: if the socket isn't reachable, leave
+        the connect timeout in place.
+        """
+        sock = getattr(getattr(getattr(self._resp, "fp", None), "raw", None),
+                       "_sock", None)
+        if sock is not None:
+            try:
+                sock.settimeout(timeout)
+            except OSError:
+                pass
 
     def _read_loop(self):
         try:
@@ -303,6 +324,8 @@ class SSEClientTransport:
         finally:
             self._running = False
             self._endpoint_ready.set()  # unblock start() if the stream died early
+            self._correlator.fail_all(protocol.make_error(
+                None, protocol.INTERNAL_ERROR, "SSE stream closed"))
 
     def send_request(self, method, params=None, timeout=30):
         req_id = self._correlator.next_id()
