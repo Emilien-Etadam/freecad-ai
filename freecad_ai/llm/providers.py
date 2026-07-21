@@ -148,7 +148,14 @@ PROVIDERS = {
         "base_url": "",
         "default_model": "",
         "api_style": "openai",
-        "supports_tools": False,
+        # Custom endpoints are OpenAI-compatible and there is no per-model
+        # tool probe for them (the /api/show capability check is Ollama-only),
+        # so this static flag is the sole source of truth. Default True: most
+        # custom servers (vLLM, llama.cpp --jinja, SGLang) support tool calling,
+        # and a False default silently strips the tools array from every
+        # request (issue #38). A genuinely tool-less endpoint opts out via
+        # tools_detected=false in config.json.
+        "supports_tools": True,
     },
 }
 

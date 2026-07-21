@@ -239,3 +239,142 @@ class TestGetDescriptions:
 
         reg = SkillsRegistry()
         assert reg.get_descriptions() == ""
+
+
+class TestSkillReferences:
+    def _make_skill_with_refs(self, tmp_path, monkeypatch):
+        import freecad_ai.extensions.skills as skills_mod
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        sd = skills_dir / "debug-model"
+        sd.mkdir()
+        (sd / "SKILL.md").write_text("# Debug Model\n\nDiagnose broken models.\n")
+        refs = sd / "references"
+        refs.mkdir()
+        (refs / "freecad-gotchas.md").write_text(
+            "# FreeCAD gotchas\n\ngetObjectsByLabel vs getObject, AttachmentSupport.\n"
+        )
+        (refs / "fix-attachment.md").write_text(
+            "# Fix attachment\n\nRe-attach a face or datum plane.\n"
+        )
+        monkeypatch.setattr(skills_mod, "SKILLS_DIR", str(skills_dir))
+        monkeypatch.setattr(skills_mod, "BUILTIN_SKILLS_DIR", str(tmp_path / "nonexistent"))
+        return skills_dir
+
+    def test_scans_reference_files_into_dict(self, tmp_path, monkeypatch):
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        skill = reg.get_skill("debug-model")
+        assert set(skill.references) == {"freecad-gotchas", "fix-attachment"}
+        assert skill.references["freecad-gotchas"].endswith(
+            os.path.join("references", "freecad-gotchas.md")
+        )
+
+    def test_skill_without_references_has_empty_dict(self, mock_skills_dir, monkeypatch):
+        import freecad_ai.extensions.skills as skills_mod
+        monkeypatch.setattr(skills_mod, "SKILLS_DIR", str(mock_skills_dir))
+        monkeypatch.setattr(skills_mod, "BUILTIN_SKILLS_DIR", str(mock_skills_dir))
+        reg = SkillsRegistry()
+        assert reg.get_skill("test-skill").references == {}
+
+    def test_get_resource_returns_file_contents(self, tmp_path, monkeypatch):
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        result = reg.get_skill_resource("debug-model", "freecad-gotchas")
+        assert "output" in result
+        assert "AttachmentSupport" in result["output"]
+
+    def test_get_resource_accepts_md_extension(self, tmp_path, monkeypatch):
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        result = reg.get_skill_resource("debug-model", "fix-attachment.md")
+        assert "output" in result
+        assert "datum plane" in result["output"]
+
+    def test_get_resource_unknown_key_lists_available(self, tmp_path, monkeypatch):
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        result = reg.get_skill_resource("debug-model", "nope")
+        assert "error" in result
+        assert "freecad-gotchas" in result["error"]
+        assert "fix-attachment" in result["error"]
+
+    def test_get_resource_skill_without_references(self, mock_skills_dir, monkeypatch):
+        import freecad_ai.extensions.skills as skills_mod
+        monkeypatch.setattr(skills_mod, "SKILLS_DIR", str(mock_skills_dir))
+        monkeypatch.setattr(skills_mod, "BUILTIN_SKILLS_DIR", str(mock_skills_dir))
+        reg = SkillsRegistry()
+        result = reg.get_skill_resource("test-skill", "anything")
+        assert "error" in result
+        assert "no references" in result["error"].lower()
+
+    def test_get_resource_unknown_skill(self, tmp_path, monkeypatch):
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        result = reg.get_skill_resource("no-such-skill", "freecad-gotchas")
+        assert "error" in result
+
+    def test_get_resource_traversal_is_not_found(self, tmp_path, monkeypatch):
+        """Model input is a key, never a path — traversal keys just miss."""
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        for evil in ["../SKILL", "../../conftest", "/etc/passwd", "..\\SKILL"]:
+            result = reg.get_skill_resource("debug-model", evil)
+            assert "error" in result, f"{evil!r} should not resolve"
+
+    def test_execute_skill_appends_references_manifest(self, tmp_path, monkeypatch):
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        result = reg.execute_skill("debug-model")
+        content = result["inject_prompt"]
+        assert "Diagnose broken models." in content            # original SKILL.md
+        assert "Available references" in content                # manifest heading
+        assert "freecad-gotchas" in content and "fix-attachment" in content
+        # advertises the exact invocation syntax
+        assert "resource='freecad-gotchas'" in content
+        # includes a one-line summary drawn from the file
+        assert "getObjectsByLabel" in content
+
+    def test_execute_skill_no_manifest_without_references(self, mock_skills_dir, monkeypatch):
+        import freecad_ai.extensions.skills as skills_mod
+        monkeypatch.setattr(skills_mod, "SKILLS_DIR", str(mock_skills_dir))
+        monkeypatch.setattr(skills_mod, "BUILTIN_SKILLS_DIR", str(mock_skills_dir))
+        reg = SkillsRegistry()
+        result = reg.execute_skill("test-skill")
+        assert "Available references" not in result["inject_prompt"]
+
+
+class TestUseSkillResource:
+    def _refs_skill(self, tmp_path, monkeypatch):
+        import freecad_ai.extensions.skills as skills_mod
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        sd = skills_dir / "debug-model"
+        sd.mkdir()
+        (sd / "SKILL.md").write_text("# Debug Model\n\nDiagnose broken models.\n")
+        refs = sd / "references"
+        refs.mkdir()
+        (refs / "freecad-gotchas.md").write_text("# Gotchas\n\nAttachmentSupport not Support.\n")
+        monkeypatch.setattr(skills_mod, "SKILLS_DIR", str(skills_dir))
+        monkeypatch.setattr(skills_mod, "BUILTIN_SKILLS_DIR", str(tmp_path / "none"))
+
+    def test_use_skill_resource_returns_file(self, tmp_path, monkeypatch):
+        from freecad_ai.tools.freecad_tools import _handle_use_skill
+        self._refs_skill(tmp_path, monkeypatch)
+        result = _handle_use_skill("debug-model", resource="freecad-gotchas")
+        assert result.success is True
+        assert "AttachmentSupport" in result.output
+
+    def test_use_skill_resource_unknown_errors(self, tmp_path, monkeypatch):
+        from freecad_ai.tools.freecad_tools import _handle_use_skill
+        self._refs_skill(tmp_path, monkeypatch)
+        result = _handle_use_skill("debug-model", resource="missing")
+        assert result.success is False
+        assert "freecad-gotchas" in result.error
+
+    def test_use_skill_without_resource_still_loads_skill(self, tmp_path, monkeypatch):
+        from freecad_ai.tools.freecad_tools import _handle_use_skill
+        self._refs_skill(tmp_path, monkeypatch)
+        result = _handle_use_skill("debug-model")
+        assert result.success is True
+        assert "Diagnose broken models." in result.output

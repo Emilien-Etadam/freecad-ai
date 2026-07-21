@@ -278,6 +278,34 @@ class TestSupportsToolsConfig:
         assert cfg2.tools_detected is True
         assert cfg2.thinking_detected is False
 
+    def test_custom_provider_supports_tools_by_default(self):
+        """Issue #38: a custom OpenAI-compatible endpoint must get tools.
+
+        There is no per-model tool probe for the custom provider (the
+        /api/show capability check is Ollama-only), so tools_detected stays
+        None and the static provider flag is the sole source of truth. It
+        must therefore default to True — most custom servers (vLLM,
+        llama.cpp --jinja, SGLang) support tool calling, and a False default
+        silently strips the tools array from every request.
+        """
+        from freecad_ai.config import AppConfig
+        cfg = AppConfig()
+        cfg.provider.name = "custom"
+        cfg.tools_detected = None  # no Ollama probe runs for custom
+        assert cfg.supports_tools is True
+
+    def test_custom_provider_tools_opt_out_still_honored(self):
+        """A genuinely tool-less custom endpoint can still opt out.
+
+        Setting tools_detected=False (via config.json) must override the
+        now-True static default, so the escape hatch keeps working.
+        """
+        from freecad_ai.config import AppConfig
+        cfg = AppConfig()
+        cfg.provider.name = "custom"
+        cfg.tools_detected = False
+        assert cfg.supports_tools is False
+
 
 class TestFallbackDiscovery:
     """MCP fallback tool search."""
