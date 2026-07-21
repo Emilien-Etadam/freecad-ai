@@ -276,3 +276,48 @@ class TestSkillReferences:
         monkeypatch.setattr(skills_mod, "BUILTIN_SKILLS_DIR", str(mock_skills_dir))
         reg = SkillsRegistry()
         assert reg.get_skill("test-skill").references == {}
+
+    def test_get_resource_returns_file_contents(self, tmp_path, monkeypatch):
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        result = reg.get_skill_resource("debug-model", "freecad-gotchas")
+        assert "output" in result
+        assert "AttachmentSupport" in result["output"]
+
+    def test_get_resource_accepts_md_extension(self, tmp_path, monkeypatch):
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        result = reg.get_skill_resource("debug-model", "fix-attachment.md")
+        assert "output" in result
+        assert "datum plane" in result["output"]
+
+    def test_get_resource_unknown_key_lists_available(self, tmp_path, monkeypatch):
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        result = reg.get_skill_resource("debug-model", "nope")
+        assert "error" in result
+        assert "freecad-gotchas" in result["error"]
+        assert "fix-attachment" in result["error"]
+
+    def test_get_resource_skill_without_references(self, mock_skills_dir, monkeypatch):
+        import freecad_ai.extensions.skills as skills_mod
+        monkeypatch.setattr(skills_mod, "SKILLS_DIR", str(mock_skills_dir))
+        monkeypatch.setattr(skills_mod, "BUILTIN_SKILLS_DIR", str(mock_skills_dir))
+        reg = SkillsRegistry()
+        result = reg.get_skill_resource("test-skill", "anything")
+        assert "error" in result
+        assert "no references" in result["error"].lower()
+
+    def test_get_resource_unknown_skill(self, tmp_path, monkeypatch):
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        result = reg.get_skill_resource("no-such-skill", "freecad-gotchas")
+        assert "error" in result
+
+    def test_get_resource_traversal_is_not_found(self, tmp_path, monkeypatch):
+        """Model input is a key, never a path — traversal keys just miss."""
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        for evil in ["../SKILL", "../../conftest", "/etc/passwd", "..\\SKILL"]:
+            result = reg.get_skill_resource("debug-model", evil)
+            assert "error" in result, f"{evil!r} should not resolve"

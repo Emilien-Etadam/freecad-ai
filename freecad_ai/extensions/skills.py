@@ -197,6 +197,38 @@ class SkillsRegistry:
         # Default: inject SKILL.md content into the prompt
         return {"inject_prompt": skill.content}
 
+    def get_skill_resource(self, name: str, resource: str) -> dict:
+        """Return the contents of a skill's reference file.
+
+        `resource` is a KEY into the pre-scanned Skill.references allowlist —
+        it is never treated as a filesystem path, so directory traversal is
+        impossible. The key may be given with or without an extension and is
+        matched case-insensitively.
+
+        Returns {"output": contents} or {"error": message}.
+        """
+        skill = self._skills.get(name)
+        if not skill:
+            return {"error": f"Unknown skill: {name}"}
+        if not skill.references:
+            return {"error": f"Skill '{name}' has no references."}
+
+        key = os.path.splitext(resource.strip())[0].lower()
+        path = skill.references.get(key)
+        if not path:
+            available = ", ".join(sorted(skill.references))
+            return {
+                "error": (
+                    f"Reference '{resource}' not found in skill '{name}'. "
+                    f"Available: {available}"
+                )
+            }
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return {"output": f.read()}
+        except (OSError, UnicodeDecodeError) as e:
+            return {"error": f"Could not read reference '{resource}': {e}"}
+
     def _run_handler(self, skill: Skill, args: str) -> dict | None:
         """Try to load and run a skill's handler.py.
 
