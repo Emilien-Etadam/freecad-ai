@@ -11,6 +11,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
+import urllib.request
 import uuid
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -19,6 +21,39 @@ from typing import Any, Callable
 from . import protocol
 
 logger = logging.getLogger(__name__)
+
+
+def _iter_sse_events(fp):
+    """Yield (event, data) tuples from a streaming SSE file object.
+
+    Parses the subset of the text/event-stream format MCP uses: ``event:`` and
+    ``data:`` fields terminated by a blank line. Multiple ``data:`` lines join
+    with a newline. Comment lines (leading ``:``) and other fields (``id:``,
+    ``retry:``) are ignored. The event name defaults to ``"message"`` when only
+    ``data`` is present.
+    """
+    event = None
+    data_lines = []
+    for raw in fp:
+        line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        line = line.rstrip("\n").rstrip("\r")
+        if line == "":
+            if data_lines:
+                yield (event or "message", "\n".join(data_lines))
+            event = None
+            data_lines = []
+            continue
+        if line.startswith(":"):
+            continue
+        field, _, value = line.partition(":")
+        if value.startswith(" "):
+            value = value[1:]
+        if field == "event":
+            event = value
+        elif field == "data":
+            data_lines.append(value)
+    # A trailing frame with no terminating blank line is dropped (matches the
+    # wire convention that events are terminated by a blank line).
 
 
 class StdioClientTransport:
