@@ -370,6 +370,90 @@ class SSEClientTransport:
                 and self._reader_thread.is_alive())
 
 
+class StreamableHTTPClientTransport:
+    """Client transport speaking the MCP Streamable HTTP protocol.
+
+    Each ``send_request`` POSTs JSON-RPC to a single endpoint; the reply is read
+    synchronously on the calling thread — either an inline ``application/json``
+    body or a ``text/event-stream`` walked until the matching id. The
+    ``Mcp-Session-Id`` returned at ``initialize`` is echoed on later requests.
+    """
+
+    def __init__(self, url, headers=None, *, ssl_context=None, connect_timeout=30):
+        self._url = url
+        self._headers = dict(headers or {})
+        self._ssl_context = ssl_context
+        self._connect_timeout = connect_timeout
+        self._session_id = None
+        self._next_id = 1
+        self._id_lock = threading.Lock()
+        self._running = False
+
+    def start(self):
+        self._running = True
+
+    def _alloc_id(self):
+        with self._id_lock:
+            rid = self._next_id
+            self._next_id += 1
+        return rid
+
+    def send_request(self, method, params=None, timeout=30):
+        req_id = self._alloc_id()
+        msg = protocol.make_request(method, params, id=req_id)
+        try:
+            resp = self._post(msg, timeout)
+        except Exception as exc:  # noqa: BLE001 — surface as JSON-RPC error
+            return protocol.make_error(req_id, protocol.INTERNAL_ERROR, str(exc))
+
+        session = resp.headers.get("Mcp-Session-Id")
+        if session:
+            self._session_id = session
+        content_type = resp.headers.get("Content-Type", "")
+        try:
+            if "text/event-stream" in content_type:
+                for event, data in _iter_sse_events(resp):
+                    if event != "message":
+                        continue
+                    try:
+                        candidate = protocol.decode(data)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    if candidate.get("id") == req_id:
+                        return candidate
+                return protocol.make_error(
+                    req_id, protocol.INTERNAL_ERROR,
+                    "MCP HTTP stream closed before a matching response")
+            return protocol.decode(resp.read().decode("utf-8"))
+        finally:
+            resp.close()
+
+    def send_notification(self, method, params=None):
+        resp = self._post(protocol.make_notification(method, params),
+                          self._connect_timeout)
+        resp.read()
+        resp.close()
+
+    def _post(self, msg, timeout):
+        req = urllib.request.Request(
+            self._url, data=protocol.encode(msg), method="POST")
+        for key, value in self._headers.items():
+            req.add_header(key, value)
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Accept", "application/json, text/event-stream")
+        if self._session_id:
+            req.add_header("Mcp-Session-Id", self._session_id)
+        return urllib.request.urlopen(
+            req, timeout=timeout, context=self._ssl_context)
+
+    def stop(self):
+        self._running = False
+
+    @property
+    def is_alive(self):
+        return self._running
+
+
 class StdioServerTransport:
     """Server-side transport: reads JSON-RPC from stdin, writes to stdout."""
 
