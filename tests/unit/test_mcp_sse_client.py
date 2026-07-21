@@ -72,3 +72,110 @@ class TestRequestCorrelator:
         event = c.register(rid)
         c.fail_all({"error": "stopped"})
         assert c.wait(rid, event, timeout=1) == {"error": "stopped"}
+
+
+import time
+
+from freecad_ai.mcp import protocol
+from freecad_ai.mcp.transport import SSEClientTransport, SSEServerTransport
+
+
+def _fake_server_handler(msg):
+    """Minimal JSON-RPC handler standing in for a real MCP server."""
+    method = msg.get("method")
+    msg_id = msg.get("id")
+    if method == "initialize":
+        return protocol.make_response(msg_id, {
+            "protocolVersion": "2025-03-26", "capabilities": {},
+            "serverInfo": {"name": "fake", "version": "1"},
+        })
+    if method == "tools/list":
+        return protocol.make_response(msg_id, {"tools": [
+            {"name": "ping", "description": "d", "inputSchema": {"type": "object"}},
+        ]})
+    if method == "tools/call":
+        return protocol.make_response(msg_id, {
+            "content": [{"type": "text", "text": "pong"}], "isError": False})
+    # Unknown methods get NO reply — the timeout test relies on this silence.
+    return None
+
+
+class _RunningSSEServer:
+    """Start the workbench's own SSE server on an ephemeral port, in a thread."""
+
+    def __enter__(self):
+        self.transport = SSEServerTransport(host="127.0.0.1", port=0)
+        self.transport._handler = _fake_server_handler
+        self.httpd = self.transport._make_server()
+        self.port = self.httpd.server_address[1]
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+        self.url = f"http://127.0.0.1:{self.port}/sse"
+        return self
+
+    def __exit__(self, *exc):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+class TestSSEClientTransport:
+    def test_connect_handshake_and_tool_call(self):
+        with _RunningSSEServer() as srv:
+            t = SSEClientTransport(srv.url, connect_timeout=5)
+            t.start()
+            try:
+                init = t.send_request("initialize", {"protocolVersion": "2025-03-26"},
+                                      timeout=5)
+                assert "result" in init
+                tools = t.send_request("tools/list", timeout=5)
+                assert tools["result"]["tools"][0]["name"] == "ping"
+                call = t.send_request("tools/call",
+                                      {"name": "ping", "arguments": {}}, timeout=5)
+                assert call["result"]["content"][0]["text"] == "pong"
+            finally:
+                t.stop()
+
+    def test_is_alive_transitions(self):
+        with _RunningSSEServer() as srv:
+            t = SSEClientTransport(srv.url, connect_timeout=5)
+            assert t.is_alive is False
+            t.start()
+            assert t.is_alive is True
+            t.stop()
+            assert t.is_alive is False
+
+    def test_send_request_timeout(self):
+        # A server that never answers a made-up method → wait() times out.
+        with _RunningSSEServer() as srv:
+            t = SSEClientTransport(srv.url, connect_timeout=5)
+            t.start()
+            try:
+                with pytest.raises(TimeoutError):
+                    t.send_request("never/answered", timeout=0.3)
+            finally:
+                t.stop()
+
+    def test_start_raises_without_endpoint_event(self):
+        # A server that opens a stream but never sends an endpoint event.
+        import http.server
+
+        class Silent(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                time.sleep(2)  # stream stays open but never sends an endpoint
+            def log_message(self, *a):
+                pass
+
+        httpd = http.server.HTTPServer(("127.0.0.1", 0), Silent)
+        port = httpd.server_address[1]
+        th = threading.Thread(target=httpd.serve_forever, daemon=True)
+        th.start()
+        try:
+            t = SSEClientTransport(f"http://127.0.0.1:{port}/sse", connect_timeout=0.5)
+            with pytest.raises(TimeoutError):
+                t.start()
+        finally:
+            httpd.shutdown()
+            httpd.server_close()

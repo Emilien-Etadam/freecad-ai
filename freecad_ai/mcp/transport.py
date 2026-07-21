@@ -246,6 +246,107 @@ class StdioClientTransport:
         return self._running and self._process is not None and self._process.poll() is None
 
 
+class SSEClientTransport:
+    """Client transport speaking the legacy MCP HTTP+SSE protocol.
+
+    ``start()`` opens ``GET <url>`` as a streaming response on a reader thread,
+    reads the advertised ``endpoint`` event, then POSTs JSON-RPC requests to
+    that endpoint; responses arrive back over the GET stream and are matched by
+    id via ``_RequestCorrelator``.
+    """
+
+    def __init__(self, url, headers=None, *, ssl_context=None, connect_timeout=30):
+        self._url = url
+        self._headers = dict(headers or {})
+        self._ssl_context = ssl_context
+        self._connect_timeout = connect_timeout
+        self._correlator = _RequestCorrelator()
+        self._resp = None
+        self._reader_thread = None
+        self._endpoint_url = None
+        self._endpoint_ready = threading.Event()
+        self._running = False
+
+    def start(self):
+        req = urllib.request.Request(self._url, method="GET")
+        for key, value in self._headers.items():
+            req.add_header(key, value)
+        req.add_header("Accept", "text/event-stream")
+        self._resp = urllib.request.urlopen(
+            req, timeout=self._connect_timeout, context=self._ssl_context)
+        self._running = True
+        self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader_thread.start()
+        if not self._endpoint_ready.wait(self._connect_timeout):
+            self.stop()
+            raise TimeoutError(
+                f"MCP SSE server '{self._url}' sent no endpoint event "
+                f"within {self._connect_timeout}s")
+        if self._endpoint_url is None:
+            self.stop()
+            raise RuntimeError(f"MCP SSE stream '{self._url}' closed before handshake")
+
+    def _read_loop(self):
+        try:
+            for event, data in _iter_sse_events(self._resp):
+                if event == "endpoint":
+                    self._endpoint_url = urllib.parse.urljoin(self._url, data)
+                    self._endpoint_ready.set()
+                elif event == "message":
+                    try:
+                        msg = protocol.decode(data)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    self._correlator.resolve(msg)
+        except Exception:
+            pass
+        finally:
+            self._running = False
+            self._endpoint_ready.set()  # unblock start() if the stream died early
+
+    def send_request(self, method, params=None, timeout=30):
+        req_id = self._correlator.next_id()
+        event = self._correlator.register(req_id)
+        try:
+            self._post(protocol.make_request(method, params, id=req_id))
+        except Exception as exc:  # noqa: BLE001 — surface as JSON-RPC error
+            self._correlator.cancel(req_id)
+            return protocol.make_error(req_id, protocol.INTERNAL_ERROR, str(exc))
+        return self._correlator.wait(req_id, event, timeout)
+
+    def send_notification(self, method, params=None):
+        self._post(protocol.make_notification(method, params))
+
+    def _post(self, msg):
+        if self._endpoint_url is None:
+            raise RuntimeError("MCP SSE transport not connected (no endpoint)")
+        req = urllib.request.Request(
+            self._endpoint_url, data=protocol.encode(msg), method="POST")
+        for key, value in self._headers.items():
+            req.add_header(key, value)
+        req.add_header("Content-Type", "application/json")
+        resp = urllib.request.urlopen(
+            req, timeout=self._connect_timeout, context=self._ssl_context)
+        resp.read()   # drain the 202 body
+        resp.close()
+
+    def stop(self):
+        self._running = False
+        if self._resp is not None:
+            try:
+                self._resp.close()
+            except Exception:
+                pass
+            self._resp = None
+        self._correlator.fail_all(
+            protocol.make_error(None, protocol.INTERNAL_ERROR, "Transport stopped"))
+
+    @property
+    def is_alive(self):
+        return (self._running and self._reader_thread is not None
+                and self._reader_thread.is_alive())
+
+
 class StdioServerTransport:
     """Server-side transport: reads JSON-RPC from stdin, writes to stdout."""
 
