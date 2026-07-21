@@ -194,8 +194,27 @@ class SkillsRegistry:
             if handler_result is not None:
                 return handler_result
 
-        # Default: inject SKILL.md content into the prompt
-        return {"inject_prompt": skill.content}
+        # Default: inject SKILL.md content into the prompt, plus a manifest of
+        # any on-demand reference files the skill bundles (tier-3 disclosure).
+        content = skill.content + self.render_references_manifest(skill)
+        return {"inject_prompt": content}
+
+    def render_references_manifest(self, skill: Skill) -> str:
+        """Markdown block advertising a skill's on-demand reference files."""
+        if not skill.references:
+            return ""
+        lines = [
+            "\n\n## Available references",
+            f"Load one when needed with "
+            f"use_skill(name='{skill.name}', resource='<key>'):",
+        ]
+        for key in sorted(skill.references):
+            summary = _reference_summary(skill.references[key])
+            bullet = f"- `{key}` (resource='{key}')"
+            if summary:
+                bullet += f" — {summary}"
+            lines.append(bullet)
+        return "\n".join(lines)
 
     def get_skill_resource(self, name: str, resource: str) -> dict:
         """Return the contents of a skill's reference file.
@@ -349,6 +368,30 @@ class SkillsRegistry:
             shutil.rmtree(user_skill_dir)
             return True
         return False
+
+
+def _reference_summary(path: str) -> str:
+    """One-line summary of a reference file for the manifest.
+
+    Prefer the first non-empty, non-heading line (matching how skill
+    descriptions are extracted in _scan_skills_dir); fall back to the first
+    heading's text if the file is heading-only.
+    """
+    heading = ""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stripped.startswith("#"):
+                    if not heading:
+                        heading = stripped.lstrip("#").strip()
+                    continue
+                return stripped[:100]
+    except (OSError, UnicodeDecodeError):
+        pass
+    return heading[:100]
 
 
 def _file_hash(path: str) -> str:

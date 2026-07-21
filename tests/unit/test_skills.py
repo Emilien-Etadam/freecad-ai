@@ -321,3 +321,24 @@ class TestSkillReferences:
         for evil in ["../SKILL", "../../conftest", "/etc/passwd", "..\\SKILL"]:
             result = reg.get_skill_resource("debug-model", evil)
             assert "error" in result, f"{evil!r} should not resolve"
+
+    def test_execute_skill_appends_references_manifest(self, tmp_path, monkeypatch):
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        result = reg.execute_skill("debug-model")
+        content = result["inject_prompt"]
+        assert "Diagnose broken models." in content            # original SKILL.md
+        assert "Available references" in content                # manifest heading
+        assert "freecad-gotchas" in content and "fix-attachment" in content
+        # advertises the exact invocation syntax
+        assert "resource='freecad-gotchas'" in content
+        # includes a one-line summary drawn from the file
+        assert "getObjectsByLabel" in content
+
+    def test_execute_skill_no_manifest_without_references(self, mock_skills_dir, monkeypatch):
+        import freecad_ai.extensions.skills as skills_mod
+        monkeypatch.setattr(skills_mod, "SKILLS_DIR", str(mock_skills_dir))
+        monkeypatch.setattr(skills_mod, "BUILTIN_SKILLS_DIR", str(mock_skills_dir))
+        reg = SkillsRegistry()
+        result = reg.execute_skill("test-skill")
+        assert "Available references" not in result["inject_prompt"]
