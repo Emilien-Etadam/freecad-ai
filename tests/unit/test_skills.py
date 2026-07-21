@@ -239,3 +239,40 @@ class TestGetDescriptions:
 
         reg = SkillsRegistry()
         assert reg.get_descriptions() == ""
+
+
+class TestSkillReferences:
+    def _make_skill_with_refs(self, tmp_path, monkeypatch):
+        import freecad_ai.extensions.skills as skills_mod
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        sd = skills_dir / "debug-model"
+        sd.mkdir()
+        (sd / "SKILL.md").write_text("# Debug Model\n\nDiagnose broken models.\n")
+        refs = sd / "references"
+        refs.mkdir()
+        (refs / "freecad-gotchas.md").write_text(
+            "# FreeCAD gotchas\n\ngetObjectsByLabel vs getObject, AttachmentSupport.\n"
+        )
+        (refs / "fix-attachment.md").write_text(
+            "# Fix attachment\n\nRe-attach a face or datum plane.\n"
+        )
+        monkeypatch.setattr(skills_mod, "SKILLS_DIR", str(skills_dir))
+        monkeypatch.setattr(skills_mod, "BUILTIN_SKILLS_DIR", str(tmp_path / "nonexistent"))
+        return skills_dir
+
+    def test_scans_reference_files_into_dict(self, tmp_path, monkeypatch):
+        self._make_skill_with_refs(tmp_path, monkeypatch)
+        reg = SkillsRegistry()
+        skill = reg.get_skill("debug-model")
+        assert set(skill.references) == {"freecad-gotchas", "fix-attachment"}
+        assert skill.references["freecad-gotchas"].endswith(
+            os.path.join("references", "freecad-gotchas.md")
+        )
+
+    def test_skill_without_references_has_empty_dict(self, mock_skills_dir, monkeypatch):
+        import freecad_ai.extensions.skills as skills_mod
+        monkeypatch.setattr(skills_mod, "SKILLS_DIR", str(mock_skills_dir))
+        monkeypatch.setattr(skills_mod, "BUILTIN_SKILLS_DIR", str(mock_skills_dir))
+        reg = SkillsRegistry()
+        assert reg.get_skill("test-skill").references == {}

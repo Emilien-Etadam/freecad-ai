@@ -34,6 +34,7 @@ class Skill:
     trigger: str = ""  # Slash command, e.g. "/thread-insert"
     has_handler: bool = False
     validation_path: str = ""
+    references: dict = field(default_factory=dict)  # key (lowercased stem) -> abspath
 
 
 class SkillsRegistry:
@@ -98,6 +99,19 @@ class SkillsRegistry:
             if os.path.isfile(val_file):
                 validation_path = val_file
 
+            # Tier-3 progressive disclosure: scan a sibling references/ dir
+            # (top level only) into a {key -> abspath} allowlist. The model
+            # later names a key, never a path, so traversal is impossible.
+            references = {}
+            refs_dir = os.path.join(skill_dir, "references")
+            if os.path.isdir(refs_dir):
+                for ref_entry in sorted(os.listdir(refs_dir)):
+                    ref_path = os.path.join(refs_dir, ref_entry)
+                    if not os.path.isfile(ref_path):
+                        continue
+                    key = os.path.splitext(ref_entry)[0].lower()
+                    references[key] = ref_path
+
             self._skills[entry] = Skill(
                 name=entry,
                 description=description,
@@ -106,6 +120,7 @@ class SkillsRegistry:
                 trigger=f"/{entry}",
                 has_handler=os.path.isfile(handler_path),
                 validation_path=validation_path,
+                references=references,
             )
 
     def register(self, name: str, content: str, trigger: str = ""):
