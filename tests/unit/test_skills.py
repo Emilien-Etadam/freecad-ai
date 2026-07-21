@@ -342,3 +342,39 @@ class TestSkillReferences:
         reg = SkillsRegistry()
         result = reg.execute_skill("test-skill")
         assert "Available references" not in result["inject_prompt"]
+
+
+class TestUseSkillResource:
+    def _refs_skill(self, tmp_path, monkeypatch):
+        import freecad_ai.extensions.skills as skills_mod
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        sd = skills_dir / "debug-model"
+        sd.mkdir()
+        (sd / "SKILL.md").write_text("# Debug Model\n\nDiagnose broken models.\n")
+        refs = sd / "references"
+        refs.mkdir()
+        (refs / "freecad-gotchas.md").write_text("# Gotchas\n\nAttachmentSupport not Support.\n")
+        monkeypatch.setattr(skills_mod, "SKILLS_DIR", str(skills_dir))
+        monkeypatch.setattr(skills_mod, "BUILTIN_SKILLS_DIR", str(tmp_path / "none"))
+
+    def test_use_skill_resource_returns_file(self, tmp_path, monkeypatch):
+        from freecad_ai.tools.freecad_tools import _handle_use_skill
+        self._refs_skill(tmp_path, monkeypatch)
+        result = _handle_use_skill("debug-model", resource="freecad-gotchas")
+        assert result.success is True
+        assert "AttachmentSupport" in result.output
+
+    def test_use_skill_resource_unknown_errors(self, tmp_path, monkeypatch):
+        from freecad_ai.tools.freecad_tools import _handle_use_skill
+        self._refs_skill(tmp_path, monkeypatch)
+        result = _handle_use_skill("debug-model", resource="missing")
+        assert result.success is False
+        assert "freecad-gotchas" in result.error
+
+    def test_use_skill_without_resource_still_loads_skill(self, tmp_path, monkeypatch):
+        from freecad_ai.tools.freecad_tools import _handle_use_skill
+        self._refs_skill(tmp_path, monkeypatch)
+        result = _handle_use_skill("debug-model")
+        assert result.success is True
+        assert "Diagnose broken models." in result.output

@@ -73,3 +73,11 @@ class TestExecuteCodeDescription:
             or "do not persist" in desc
         # …and the actionable consequence spelled out.
         assert "self-contained" in desc
+
+
+class TestUseSkillDescription:
+    def test_advertises_resource_two_step(self):
+        from freecad_ai.tools.freecad_tools import USE_SKILL
+        desc = USE_SKILL.description.lower()
+        assert "resource" in desc
+        assert "reference" in desc
