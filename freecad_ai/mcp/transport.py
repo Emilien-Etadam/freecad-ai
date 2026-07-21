@@ -56,6 +56,60 @@ def _iter_sse_events(fp):
     # wire convention that events are terminated by a blank line).
 
 
+class _RequestCorrelator:
+    """Matches asynchronous JSON-RPC responses to blocked callers by id.
+
+    Used by ``SSEClientTransport`` (whose replies arrive on a separate reader
+    thread). ``StdioClientTransport`` keeps its own equivalent inline copy.
+    """
+
+    def __init__(self):
+        self._pending = {}   # id -> {"event": Event, "response": dict|None}
+        self._lock = threading.Lock()
+        self._next_id = 1
+
+    def next_id(self):
+        with self._lock:
+            rid = self._next_id
+            self._next_id += 1
+        return rid
+
+    def register(self, req_id):
+        event = threading.Event()
+        with self._lock:
+            self._pending[req_id] = {"event": event, "response": None}
+        return event
+
+    def resolve(self, msg):
+        msg_id = msg.get("id")
+        if msg_id is None:
+            return
+        with self._lock:
+            entry = self._pending.get(msg_id)
+            if entry is not None:
+                entry["response"] = msg
+                entry["event"].set()
+
+    def wait(self, req_id, event, timeout):
+        if not event.wait(timeout):
+            with self._lock:
+                self._pending.pop(req_id, None)
+            raise TimeoutError(f"MCP request id={req_id} timed out after {timeout}s")
+        with self._lock:
+            entry = self._pending.pop(req_id)
+        return entry["response"]
+
+    def cancel(self, req_id):
+        with self._lock:
+            self._pending.pop(req_id, None)
+
+    def fail_all(self, error):
+        with self._lock:
+            for entry in self._pending.values():
+                entry["response"] = error
+                entry["event"].set()
+
+
 class StdioClientTransport:
     """Manages a subprocess MCP server via stdin/stdout pipes."""
 
