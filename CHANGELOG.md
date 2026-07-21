@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.19.0-alpha] - 2026-07-22
+
+A feature-and-fix release bundling a new skills capability with two fixes from
+issues filed by @3dyuval.
+
+### Added
+
+- **Skill `references/` — on-demand reference files (tier-3 progressive disclosure)** (`freecad_ai/extensions/skills.py`, `freecad_ai/tools/freecad_tools.py`). A skill can now ship a `references/` subdirectory of markdown files that the model loads only when a task needs them, keeping `SKILL.md` lean. The loader scans `references/` into a per-skill `{key → path}` allowlist; `use_skill` gains an optional `resource` argument (`use_skill(name, resource="freecad-gotchas")`) that returns a reference file's contents; and a skill with references gets an auto-generated "Available references" manifest appended to its `SKILL.md` result, advertising each key and the exact call to load it. The model passes a **key**, never a path — it is looked up in the pre-scanned allowlist, so directory traversal is impossible by construction. Fully additive: skills without a `references/` directory are unchanged. `scripts/`/`assets/` remain out of scope (an execute surface is a separate proposal). ([#37](https://github.com/ghbalf/freecad-ai/issues/37); thanks @3dyuval)
+
+### Fixed
+
+- **Custom OpenAI-compatible providers no longer silently drop the tools array** (`freecad_ai/llm/providers.py`). The `custom` provider preset defaulted to `supports_tools: False`, and since the per-model tool-capability probe is Ollama-only, that static flag was the sole source of truth for custom endpoints — so tool calling was silently disabled on every request. Most custom servers (vLLM, llama.cpp `--jinja`, SGLang) support tool calling, so the default is now `True`; a genuinely tool-less endpoint opts out with `tools_detected: false` in `config.json`. ([#38](https://github.com/ghbalf/freecad-ai/issues/38); thanks @3dyuval)
+
+### Changed
+
+- **`execute_code` now tells the model its state does not persist between calls** (`freecad_ai/tools/freecad_tools.py`). Each `execute_code` call runs in a fresh namespace, but nothing signalled that, so models chained variables and imports across calls, hit a `NameError`, and looped to the tool-turn limit. The tool description now states that each call is self-contained (re-fetch objects every call; a `NameError` means a reference to an earlier call's name, not a wrong query). ([#39](https://github.com/ghbalf/freecad-ai/issues/39); thanks @3dyuval)
+
 ## [0.18.0-alpha] - 2026-07-04
 
 A small feature-and-fix release bundling two community contributions from
