@@ -9,9 +9,16 @@ get_tool_schema(). A search_tools() method allows keyword-based filtering.
 """
 
 import logging
+import ssl
+import urllib.parse
 from dataclasses import dataclass, field
 
-from .transport import StdioClientTransport
+from .transport import (
+    StdioClientTransport,
+    SSEClientTransport,
+    StreamableHTTPClientTransport,
+    _LOOPBACK_HOSTS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +51,14 @@ class MCPClient:
     behaviour).
     """
 
-    def __init__(self, name: str, command: list[str], env: dict | None = None,
-                 *, deferred: bool = True, tool_call_timeout: float = 600):
+    def __init__(self, name: str, command: list | None = None,
+                 env: dict | None = None, *, transport=None,
+                 deferred: bool = True, tool_call_timeout: float = 600):
         self.name = name
-        self._transport = StdioClientTransport(command, env)
+        if transport is not None:
+            self._transport = transport
+        else:
+            self._transport = StdioClientTransport(command, env)
         self._tools: list[MCPToolInfo] = []
         self._connected = False
         self._deferred = deferred
@@ -205,3 +216,55 @@ class MCPClient:
     @property
     def is_connected(self) -> bool:
         return self._connected and self._transport.is_alive
+
+
+def _validate_url(url: str):
+    """Reject non-http(s) schemes and plaintext http to non-loopback hosts."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"MCP URL must be http or https, got '{parsed.scheme}'")
+    if parsed.scheme == "http":
+        host = (parsed.hostname or "").lower()
+        if host not in _LOOPBACK_HOSTS:
+            raise ValueError(
+                "plaintext http:// is only allowed to localhost; use https://")
+
+
+def _build_ssl_context(cfg: dict):
+    """Return an ssl.SSLContext for custom CA / client cert, or None.
+
+    None => the transport passes context=None to urlopen (urllib's default
+    context = system CA store). A context is built only when at least one of
+    ca_bundle / client_cert is set.
+    """
+    ca = cfg.get("ca_bundle") or None
+    cert = cfg.get("client_cert") or None
+    key = cfg.get("client_key") or None
+    if not ca and not cert:
+        return None
+    context = ssl.create_default_context(cafile=ca)  # cafile=None => system defaults
+    if cert:
+        context.load_cert_chain(certfile=cert, keyfile=key or None)
+    return context
+
+
+def make_client_transport(cfg: dict):
+    """Build the client transport for one MCP server config.
+
+    transport ∈ {"stdio","sse","http"}; absent defaults to "stdio". Raises
+    ValueError on a bad URL or unknown transport (caught by connect_all).
+    """
+    transport = cfg.get("transport", "stdio")
+    if transport == "stdio":
+        command = [cfg["command"]] + cfg.get("args", [])
+        return StdioClientTransport(command, cfg.get("env") or None)
+    url = cfg["url"]
+    headers = cfg.get("headers") or {}
+    _validate_url(url)
+    ssl_context = _build_ssl_context(cfg)
+    if transport == "sse":
+        return SSEClientTransport(url, headers=headers, ssl_context=ssl_context)
+    if transport == "http":
+        return StreamableHTTPClientTransport(
+            url, headers=headers, ssl_context=ssl_context)
+    raise ValueError(f"unknown MCP transport '{transport}'")
