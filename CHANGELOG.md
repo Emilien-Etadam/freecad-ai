@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.20.0-alpha] - 2026-07-22
+
+A feature release: the workbench can now connect *to* MCP servers by URL — the
+client-side counterpart to the v0.17.0-alpha HTTP/SSE server transport. Prompted
+by a forum question from hardeeprai. ([#41](https://github.com/ghbalf/freecad-ai/issues/41), [#42](https://github.com/ghbalf/freecad-ai/pull/42))
+
 ### Added
 
 - **Connect to MCP servers by URL** (#41) — new HTTP/SSE **client** transports
