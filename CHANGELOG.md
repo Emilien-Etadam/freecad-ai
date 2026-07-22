@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Connect to MCP servers by URL** (#41) — new HTTP/SSE **client** transports
+  alongside STDIO: a legacy HTTP+SSE client and a Streamable HTTP client,
+  selectable per server in Add MCP Server. Supports remote `https://`, custom
+  auth headers, and optional custom CA bundle / client certificate (mTLS).
+  Plain `http://` is allowed only to localhost. Still zero external
+  dependencies. This is the client counterpart to the v0.17.0-alpha HTTP/SSE
+  server transport.
+
 ## [0.19.0-alpha] - 2026-07-22
 
 A feature-and-fix release bundling a new skills capability with two fixes from
