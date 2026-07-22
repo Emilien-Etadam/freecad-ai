@@ -31,6 +31,15 @@ class _StubHandler(BaseHTTPRequestHandler):
             self.send_error(500, "boom")
             return
 
+        if type(self).mode == "badjson":
+            payload = b"this is not valid json"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
         reply = protocol.make_response(req_id, {"echo": body.get("method")})
 
         if type(self).mode == "sse":
@@ -123,3 +132,32 @@ class TestStreamableHTTPClient:
             assert t.is_alive is True
             t.stop()
             assert t.is_alive is False
+
+    def test_malformed_json_response_surfaces_error(self):
+        # A 200 application/json response with a non-JSON body must return an
+        # error dict, not raise out of send_request.
+        with _RunningStub("badjson") as srv:
+            t = StreamableHTTPClientTransport(srv.url, connect_timeout=5)
+            t.start()
+            resp = t.send_request("tools/list", timeout=5)
+            assert "error" in resp
+            t.stop()
+
+    def test_transport_error_closes_closeable_exception(self):
+        # On a transport failure whose exception is file-like (e.g. HTTPError),
+        # send_request must close it rather than leak the socket.
+        from unittest.mock import patch
+
+        closed = {"v": False}
+
+        class ClosableError(Exception):
+            def close(self):
+                closed["v"] = True
+
+        t = StreamableHTTPClientTransport("https://h/mcp")
+        t.start()
+        with patch.object(t, "_post", side_effect=ClosableError("boom")):
+            resp = t.send_request("tools/list", timeout=1)
+        assert "error" in resp
+        assert closed["v"] is True
+        t.stop()

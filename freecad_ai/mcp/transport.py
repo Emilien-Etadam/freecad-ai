@@ -404,6 +404,9 @@ class StreamableHTTPClientTransport:
         try:
             resp = self._post(msg, timeout)
         except Exception as exc:  # noqa: BLE001 — surface as JSON-RPC error
+            closer = getattr(exc, "close", None)
+            if callable(closer):
+                closer()
             return protocol.make_error(req_id, protocol.INTERNAL_ERROR, str(exc))
 
         session = resp.headers.get("Mcp-Session-Id")
@@ -424,7 +427,13 @@ class StreamableHTTPClientTransport:
                 return protocol.make_error(
                     req_id, protocol.INTERNAL_ERROR,
                     "MCP HTTP stream closed before a matching response")
-            return protocol.decode(resp.read().decode("utf-8"))
+            body = resp.read().decode("utf-8")
+            try:
+                return protocol.decode(body)
+            except (json.JSONDecodeError, ValueError):
+                return protocol.make_error(
+                    req_id, protocol.INTERNAL_ERROR,
+                    "MCP HTTP response was not valid JSON")
         finally:
             resp.close()
 
