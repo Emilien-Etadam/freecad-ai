@@ -82,3 +82,36 @@ class TestMCPClientInjection:
     def test_backward_compatible_stdio_construction(self):
         client = MCPClient("srv", ["echo", "hi"], {"A": "B"})
         assert isinstance(client._transport, StdioClientTransport)
+
+
+from unittest.mock import patch
+
+from freecad_ai.mcp.manager import MCPManager
+
+
+class TestConnectAllRoutesThroughFactory:
+    def test_bad_url_server_skipped_others_connect(self):
+        mgr = MCPManager()
+        good = {"name": "good", "transport": "http", "url": "https://h/mcp"}
+        bad = {"name": "bad", "transport": "sse", "url": "http://example.com/sse"}
+
+        connected = {}
+
+        def fake_connect(self):
+            connected[self.name] = True
+
+        # Patch MCPClient.connect so we don't hit the network; the bad server
+        # fails earlier, inside make_client_transport (_validate_url).
+        with patch("freecad_ai.mcp.client.MCPClient.connect", fake_connect):
+            mgr.connect_all([good, bad])
+
+        assert "good" in mgr.connected_servers or "good" in connected
+        assert "bad" not in mgr._clients
+
+    def test_uses_factory_transport(self):
+        mgr = MCPManager()
+        cfg = {"name": "s", "transport": "http", "url": "https://h/mcp"}
+        with patch("freecad_ai.mcp.client.MCPClient.connect", lambda self: None):
+            mgr.connect_all([cfg])
+        from freecad_ai.mcp.transport import StreamableHTTPClientTransport
+        assert isinstance(mgr._clients["s"]._transport, StreamableHTTPClientTransport)
