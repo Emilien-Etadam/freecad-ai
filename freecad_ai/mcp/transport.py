@@ -406,7 +406,10 @@ class StreamableHTTPClientTransport:
         except Exception as exc:  # noqa: BLE001 — surface as JSON-RPC error
             closer = getattr(exc, "close", None)
             if callable(closer):
-                closer()
+                try:
+                    closer()
+                except Exception:  # noqa: BLE001 — cleanup must not break the never-raise contract
+                    pass
             return protocol.make_error(req_id, protocol.INTERNAL_ERROR, str(exc))
 
         session = resp.headers.get("Mcp-Session-Id")

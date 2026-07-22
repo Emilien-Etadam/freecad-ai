@@ -101,3 +101,56 @@ class TestMcpListLabel:
         label = SettingsDialog._mcp_list_label(
             {"name": "fs", "command": "npx", "args": ["-y", "srv"]})
         assert "npx" in label
+
+
+class TestUrlValidationOnAccept:
+    def test_url_error_message_empty(self):
+        assert "required" in _AddMCPServerDialog._url_error_message("").lower()
+
+    def test_url_error_message_remote_http_rejected(self):
+        msg = _AddMCPServerDialog._url_error_message("http://example.com/sse")
+        assert msg  # non-empty error
+        assert "localhost" in msg.lower() or "https" in msg.lower()
+
+    def test_url_error_message_https_ok(self):
+        assert _AddMCPServerDialog._url_error_message("https://host/sse") == ""
+
+    def test_url_error_message_http_loopback_ok(self):
+        assert _AddMCPServerDialog._url_error_message("http://localhost:3000/sse") == ""
+
+    def test_on_accept_blocks_invalid_url(self):
+        combo = MagicMock()
+        combo.currentData.return_value = "sse"
+        d = SimpleNamespace(
+            transport_combo=combo,
+            url_edit=MagicMock(**{"text.return_value": "http://example.com/sse"}),
+            _url_warning=MagicMock(),
+            accept=MagicMock(),
+        )
+        _AddMCPServerDialog._on_accept(d)
+        d._url_warning.setVisible.assert_called_with(True)
+        d.accept.assert_not_called()
+
+    def test_on_accept_allows_valid_url(self):
+        combo = MagicMock()
+        combo.currentData.return_value = "http"
+        d = SimpleNamespace(
+            transport_combo=combo,
+            url_edit=MagicMock(**{"text.return_value": "https://host/mcp"}),
+            _url_warning=MagicMock(),
+            accept=MagicMock(),
+        )
+        _AddMCPServerDialog._on_accept(d)
+        d.accept.assert_called_once()
+
+    def test_on_accept_stdio_skips_url_check(self):
+        combo = MagicMock()
+        combo.currentData.return_value = "stdio"
+        d = SimpleNamespace(
+            transport_combo=combo,
+            url_edit=MagicMock(**{"text.return_value": ""}),
+            _url_warning=MagicMock(),
+            accept=MagicMock(),
+        )
+        _AddMCPServerDialog._on_accept(d)
+        d.accept.assert_called_once()

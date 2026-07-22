@@ -2,8 +2,6 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-import pytest
-
 from freecad_ai.mcp import protocol
 from freecad_ai.mcp.transport import StreamableHTTPClientTransport
 
@@ -160,4 +158,18 @@ class TestStreamableHTTPClient:
             resp = t.send_request("tools/list", timeout=1)
         assert "error" in resp
         assert closed["v"] is True
+        t.stop()
+
+    def test_transport_error_with_raising_close_still_returns_error(self):
+        from unittest.mock import patch
+
+        class BadCloseError(Exception):
+            def close(self):
+                raise OSError("close failed")
+
+        t = StreamableHTTPClientTransport("https://h/mcp")
+        t.start()
+        with patch.object(t, "_post", side_effect=BadCloseError("boom")):
+            resp = t.send_request("tools/list", timeout=1)  # must not raise
+        assert "error" in resp
         t.stop()

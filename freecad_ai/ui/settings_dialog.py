@@ -2072,6 +2072,12 @@ class _AddMCPServerDialog(QDialog):
         self.key_edit.setPlaceholderText(
             translate("AddMCPServerDialog", "optional client key path"))
         url_form.addRow(translate("AddMCPServerDialog", "Client key:"), self.key_edit)
+
+        self._url_warning = QLabel()
+        self._url_warning.setStyleSheet("color: red;")
+        self._url_warning.setWordWrap(True)
+        self._url_warning.setVisible(False)
+        url_form.addRow("", self._url_warning)
         layout.addRow(self._url_widget)
 
         # --- shared rows ---
@@ -2107,7 +2113,7 @@ class _AddMCPServerDialog(QDialog):
         ok_label = translate("AddMCPServerDialog", "Save") if editing \
             else translate("AddMCPServerDialog", "Add")
         ok_btn = QPushButton(ok_label)
-        ok_btn.clicked.connect(self.accept)
+        ok_btn.clicked.connect(self._on_accept)
         btn_layout.addWidget(ok_btn)
 
         cancel_btn = QPushButton(translate("AddMCPServerDialog", "Cancel"))
@@ -2122,6 +2128,29 @@ class _AddMCPServerDialog(QDialog):
         is_stdio = (transport == "stdio")
         self._stdio_widget.setVisible(is_stdio)
         self._url_widget.setVisible(not is_stdio)
+
+    @staticmethod
+    def _url_error_message(url):
+        """Return an error string if the URL is invalid for a URL transport, else ''."""
+        if not url:
+            return translate("AddMCPServerDialog", "URL is required.")
+        from ..mcp.client import _validate_url
+        try:
+            _validate_url(url)
+        except ValueError as e:
+            return str(e)
+        return ""
+
+    def _on_accept(self):
+        """Validate a URL-transport server's URL before accepting the dialog."""
+        transport = self.transport_combo.currentData()
+        if transport in ("sse", "http"):
+            msg = _AddMCPServerDialog._url_error_message(self.url_edit.text().strip())
+            if msg:
+                self._url_warning.setText(msg)
+                self._url_warning.setVisible(True)
+                return
+        self.accept()
 
     def _collect_headers(self):
         headers = {}
