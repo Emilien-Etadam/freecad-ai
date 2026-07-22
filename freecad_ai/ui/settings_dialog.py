@@ -17,6 +17,7 @@ from .compat import QtWidgets, QtCore, QtGui
 from ..i18n import translate
 
 QDialog = QtWidgets.QDialog
+QWidget = QtWidgets.QWidget
 QVBoxLayout = QtWidgets.QVBoxLayout
 QHBoxLayout = QtWidgets.QHBoxLayout
 QFormLayout = QtWidgets.QFormLayout
@@ -1503,8 +1504,13 @@ class SettingsDialog(QDialog):
         if timeout != 600:
             tags.append(f"{timeout}s")
         prefix = f"({', '.join(tags)}) " if tags else ""
-        args = " ".join(entry.get("args", []))
-        return f"{prefix}{entry.get('name', '?')} — {entry.get('command', '')} {args}"
+        transport = entry.get("transport", "stdio")
+        if transport in ("sse", "http"):
+            target = f"[{transport}] {entry.get('url', '')}"
+        else:
+            args = " ".join(entry.get("args", []))
+            target = f"{entry.get('command', '')} {args}".strip()
+        return f"{prefix}{entry.get('name', '?')} — {target}"
 
     def _add_mcp_server(self):
         """Show a dialog to add a new MCP server configuration."""
@@ -1989,19 +1995,92 @@ class _AddMCPServerDialog(QDialog):
     def _build_ui(self, editing=False):
         layout = QFormLayout(self)
 
+        self.transport_combo = QComboBox()
+        self.transport_combo.addItem(
+            translate("AddMCPServerDialog", "Command (stdio)"), "stdio")
+        self.transport_combo.addItem(
+            translate("AddMCPServerDialog", "SSE (URL)"), "sse")
+        self.transport_combo.addItem(
+            translate("AddMCPServerDialog", "Streamable HTTP (URL)"), "http")
+        self.transport_combo.currentIndexChanged.connect(
+            lambda _=0: self._apply_transport_visibility(
+                self.transport_combo.currentData()))
+        layout.addRow(translate("AddMCPServerDialog", "Transport:"),
+                      self.transport_combo)
+
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText(translate("AddMCPServerDialog", "e.g. filesystem"))
+        self.name_edit.setPlaceholderText(
+            translate("AddMCPServerDialog", "e.g. filesystem"))
         layout.addRow(translate("AddMCPServerDialog", "Name:"), self.name_edit)
 
+        # --- stdio group ---
+        self._stdio_widget = QWidget()
+        stdio_form = QFormLayout(self._stdio_widget)
+        stdio_form.setContentsMargins(0, 0, 0, 0)
         self.command_edit = QLineEdit()
-        self.command_edit.setPlaceholderText(translate("AddMCPServerDialog", "e.g. npx"))
-        layout.addRow(translate("AddMCPServerDialog", "Command:"), self.command_edit)
-
+        self.command_edit.setPlaceholderText(
+            translate("AddMCPServerDialog", "e.g. npx"))
+        stdio_form.addRow(translate("AddMCPServerDialog", "Command:"),
+                          self.command_edit)
         self.args_edit = QLineEdit()
-        self.args_edit.setPlaceholderText(translate("AddMCPServerDialog", "e.g. -y @modelcontextprotocol/server-filesystem /tmp"))
-        self.args_edit.setToolTip(translate("AddMCPServerDialog", "Space-separated arguments"))
-        layout.addRow(translate("AddMCPServerDialog", "Args:"), self.args_edit)
+        self.args_edit.setPlaceholderText(translate(
+            "AddMCPServerDialog", "e.g. -y @modelcontextprotocol/server-filesystem /tmp"))
+        self.args_edit.setToolTip(
+            translate("AddMCPServerDialog", "Space-separated arguments"))
+        stdio_form.addRow(translate("AddMCPServerDialog", "Args:"), self.args_edit)
+        layout.addRow(self._stdio_widget)
 
+        # --- url group (sse / http) ---
+        self._url_widget = QWidget()
+        url_form = QFormLayout(self._url_widget)
+        url_form.setContentsMargins(0, 0, 0, 0)
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText(
+            translate("AddMCPServerDialog", "e.g. https://host/sse"))
+        url_form.addRow(translate("AddMCPServerDialog", "URL:"), self.url_edit)
+
+        self.headers_table = QTableWidget(0, 2)
+        self.headers_table.setHorizontalHeaderLabels([
+            translate("AddMCPServerDialog", "Header"),
+            translate("AddMCPServerDialog", "Value")])
+        self.headers_table.setMaximumHeight(100)
+        url_form.addRow(translate("AddMCPServerDialog", "Headers:"),
+                        self.headers_table)
+        headers_btns = QHBoxLayout()
+        add_hdr = QPushButton(translate("AddMCPServerDialog", "Add header"))
+        add_hdr.clicked.connect(
+            lambda: self.headers_table.insertRow(self.headers_table.rowCount()))
+        del_hdr = QPushButton(translate("AddMCPServerDialog", "Remove header"))
+        del_hdr.clicked.connect(
+            lambda: self.headers_table.removeRow(self.headers_table.currentRow()))
+        headers_btns.addWidget(add_hdr)
+        headers_btns.addWidget(del_hdr)
+        headers_btns.addStretch()
+        headers_wrap = QWidget()
+        headers_wrap.setLayout(headers_btns)
+        url_form.addRow("", headers_wrap)
+
+        self.ca_edit = QLineEdit()
+        self.ca_edit.setPlaceholderText(
+            translate("AddMCPServerDialog", "optional CA bundle path (.pem)"))
+        url_form.addRow(translate("AddMCPServerDialog", "CA bundle:"), self.ca_edit)
+        self.cert_edit = QLineEdit()
+        self.cert_edit.setPlaceholderText(
+            translate("AddMCPServerDialog", "optional client cert path (.pem)"))
+        url_form.addRow(translate("AddMCPServerDialog", "Client cert:"), self.cert_edit)
+        self.key_edit = QLineEdit()
+        self.key_edit.setPlaceholderText(
+            translate("AddMCPServerDialog", "optional client key path"))
+        url_form.addRow(translate("AddMCPServerDialog", "Client key:"), self.key_edit)
+
+        self._url_warning = QLabel()
+        self._url_warning.setStyleSheet("color: red;")
+        self._url_warning.setWordWrap(True)
+        self._url_warning.setVisible(False)
+        url_form.addRow("", self._url_warning)
+        layout.addRow(self._url_widget)
+
+        # --- shared rows ---
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(5, 3600)
         self.timeout_spin.setValue(600)
@@ -2034,7 +2113,7 @@ class _AddMCPServerDialog(QDialog):
         ok_label = translate("AddMCPServerDialog", "Save") if editing \
             else translate("AddMCPServerDialog", "Add")
         ok_btn = QPushButton(ok_label)
-        ok_btn.clicked.connect(self.accept)
+        ok_btn.clicked.connect(self._on_accept)
         btn_layout.addWidget(ok_btn)
 
         cancel_btn = QPushButton(translate("AddMCPServerDialog", "Cancel"))
@@ -2043,23 +2122,98 @@ class _AddMCPServerDialog(QDialog):
 
         layout.addRow(btn_layout)
 
+        self._apply_transport_visibility(self.transport_combo.currentData())
+
+    def _apply_transport_visibility(self, transport):
+        is_stdio = (transport == "stdio")
+        self._stdio_widget.setVisible(is_stdio)
+        self._url_widget.setVisible(not is_stdio)
+
+    @staticmethod
+    def _url_error_message(url):
+        """Return an error string if the URL is invalid for a URL transport, else ''."""
+        if not url:
+            return translate("AddMCPServerDialog", "URL is required.")
+        from ..mcp.client import _validate_url
+        try:
+            _validate_url(url)
+        except ValueError as e:
+            return str(e)
+        return ""
+
+    def _on_accept(self):
+        """Validate a URL-transport server's URL before accepting the dialog."""
+        transport = self.transport_combo.currentData()
+        if transport in ("sse", "http"):
+            msg = _AddMCPServerDialog._url_error_message(self.url_edit.text().strip())
+            if msg:
+                self._url_warning.setText(msg)
+                self._url_warning.setVisible(True)
+                return
+        self.accept()
+
+    def _collect_headers(self):
+        headers = {}
+        for row in range(self.headers_table.rowCount()):
+            key_item = self.headers_table.item(row, 0)
+            val_item = self.headers_table.item(row, 1)
+            key = key_item.text().strip() if key_item else ""
+            val = val_item.text().strip() if val_item else ""
+            if key:
+                headers[key] = val
+        return headers
+
+    def _populate_headers(self, headers):
+        self.headers_table.setRowCount(0)
+        for key, value in (headers or {}).items():
+            row = self.headers_table.rowCount()
+            self.headers_table.insertRow(row)
+            self.headers_table.setItem(row, 0, QTableWidgetItem(str(key)))
+            self.headers_table.setItem(row, 1, QTableWidgetItem(str(value)))
+
     def _populate(self, entry: dict):
         """Pre-populate fields from an existing MCP server config."""
         self.name_edit.setText(entry.get("name", ""))
+        transport = entry.get("transport", "stdio")
+        idx = self.transport_combo.findData(transport)
+        if idx >= 0:
+            self.transport_combo.setCurrentIndex(idx)
         self.command_edit.setText(entry.get("command", ""))
         self.args_edit.setText(" ".join(entry.get("args", [])))
+        self.url_edit.setText(entry.get("url", ""))
+        self._populate_headers(entry.get("headers", {}))
+        self.ca_edit.setText(entry.get("ca_bundle", ""))
+        self.cert_edit.setText(entry.get("client_cert", ""))
+        self.key_edit.setText(entry.get("client_key", ""))
         self.deferred_check.setChecked(entry.get("deferred", True))
         self.enabled_check.setChecked(entry.get("enabled", True))
         self.timeout_spin.setValue(int(entry.get("timeout", 600)))
+        self._apply_transport_visibility(transport)
 
     def get_config(self) -> dict:
-        args_text = self.args_edit.text().strip()
-        return {
+        transport = self.transport_combo.currentData()
+        cfg = {
             "name": self.name_edit.text().strip(),
-            "command": self.command_edit.text().strip(),
-            "args": args_text.split() if args_text else [],
-            "env": {},
+            "transport": transport,
             "enabled": self.enabled_check.isChecked(),
             "deferred": self.deferred_check.isChecked(),
             "timeout": self.timeout_spin.value(),
         }
+        if transport == "stdio":
+            args_text = self.args_edit.text().strip()
+            cfg["command"] = self.command_edit.text().strip()
+            cfg["args"] = args_text.split() if args_text else []
+            cfg["env"] = {}
+        else:
+            cfg["url"] = self.url_edit.text().strip()
+            cfg["headers"] = self._collect_headers()
+            ca = self.ca_edit.text().strip()
+            cert = self.cert_edit.text().strip()
+            key = self.key_edit.text().strip()
+            if ca:
+                cfg["ca_bundle"] = ca
+            if cert:
+                cfg["client_cert"] = cert
+            if key:
+                cfg["client_key"] = key
+        return cfg
