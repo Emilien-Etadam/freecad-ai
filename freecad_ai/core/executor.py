@@ -334,10 +334,14 @@ def _auto_save(namespace: dict):
         doc = resolve_active_document()
         if not doc or not doc.FileName:
             return  # Unsaved document, nothing to back up
-        backup = doc.FileName + ".ai-backup"
-        doc.saveAs(backup)
-        # Restore the original filename so the user doesn't notice
-        doc.FileName = doc.FileName.replace(".ai-backup", "")
+        original = doc.FileName
+        doc.saveAs(original + ".ai-backup")
+        # saveAs writes the snapshot and repoints FileName at it, and FreeCAD
+        # appends ".FCStd" when the name lacks it (".ai-backup" -> ".ai-backup.FCStd").
+        # Restore the exact original path so the extension can't compound across
+        # calls; a plain .replace(".ai-backup", "") leaves that trailing ".FCStd"
+        # behind and grows the filename by one extension every execution.
+        doc.FileName = original
     except Exception:
         pass  # Best-effort
 
