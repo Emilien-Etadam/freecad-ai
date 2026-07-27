@@ -470,3 +470,62 @@ class TestCollectObjectIssues:
         ]
         issues = executor._collect_object_issues(objects_state, set())
         assert issues == ["Object 'Pad' has null shape"]
+
+
+class _FakeDoc:
+    """Minimal stand-in for the App::Document slice ``_auto_save`` touches.
+
+    Mirrors the surprising part of FreeCAD's ``saveAs``: it writes the file
+    *and* repoints ``FileName`` at the saved path, appending ``.FCStd`` when
+    the target lacks that extension (``.ai-backup`` -> ``.ai-backup.FCStd``).
+    """
+
+    def __init__(self, filename):
+        self.FileName = filename
+        self.saved_paths = []
+
+    def saveAs(self, path):
+        if not path.endswith(".FCStd"):
+            path += ".FCStd"
+        self.saved_paths.append(path)
+        self.FileName = path
+
+
+class TestAutoSave:
+    """Regression tests for issue #45 / PR #44 — the recovery snapshot must
+    not compound ``.FCStd`` onto the document filename on each execution."""
+
+    def test_preserves_document_filename(self):
+        # After a backup the document must point at exactly the original path.
+        # The old code rebuilt it with ``.replace(".ai-backup", "")``, which
+        # left the ``.FCStd`` that saveAs appended, growing the name by one
+        # extension every call.
+        doc = _FakeDoc("/tmp/part.FCStd")
+        with patch(
+            "freecad_ai.core.active_document.resolve_active_document",
+            return_value=doc,
+        ):
+            executor._auto_save({})
+        assert doc.FileName == "/tmp/part.FCStd"
+
+    def test_backup_path_is_stable_across_calls(self):
+        # Two executions must overwrite one stable snapshot, not accrete a new
+        # ``…ai-backup.FCStd`` file each time (the litter reported in #45).
+        doc = _FakeDoc("/tmp/part.FCStd")
+        with patch(
+            "freecad_ai.core.active_document.resolve_active_document",
+            return_value=doc,
+        ):
+            executor._auto_save({})
+            executor._auto_save({})
+        assert doc.saved_paths == ["/tmp/part.FCStd.ai-backup.FCStd"] * 2
+
+    def test_no_backup_for_unsaved_document(self):
+        # An unsaved document (empty FileName) has nothing to snapshot.
+        doc = _FakeDoc("")
+        with patch(
+            "freecad_ai.core.active_document.resolve_active_document",
+            return_value=doc,
+        ):
+            executor._auto_save({})
+        assert doc.saved_paths == []
