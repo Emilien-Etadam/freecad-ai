@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.21.0-alpha] - 2026-07-27
+
+A fix-and-cleanup release for the pre-execution recovery snapshots that
+`execute_code` writes before running generated code. Prompted by a contributor
+bug report (@FairlyInconspicuous) and a design proposal (@3dyuval).
+([#44](https://github.com/ghbalf/freecad-ai/pull/44), [#46](https://github.com/ghbalf/freecad-ai/issues/46), [#48](https://github.com/ghbalf/freecad-ai/pull/48))
+
 ### Changed
 
 - **Recovery snapshots now live in a managed backups dir** (#46) — before each
@@ -25,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (keep all) to preserve prior behavior on upgrade; growth is naturally bounded
   since each document reuses one file. Recommended value if you want a hard cap:
   `50`.
+
+### Fixed
+
+- **Auto-save no longer compounds `.FCStd` onto the document filename** (#44,
+  thanks @FairlyInconspicuous) — `_auto_save` rebuilt the document path by
+  string-editing the name FreeCAD's `saveAs` had already mutated, leaving a
+  trailing `.FCStd` and growing the filename by one extension on every
+  `execute_code` call (and littering the folder with never-reused snapshots).
+  It now captures and restores the original path verbatim. Ships with unit-lane
+  regression coverage.
 
 ## [0.20.0-alpha] - 2026-07-22
 
