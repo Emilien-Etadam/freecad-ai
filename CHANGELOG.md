@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Recovery snapshots now live in a managed backups dir** (#46) — before each
+  `execute_code`, `_auto_save` writes the pre-execution snapshot to
+  `CONFIG_DIR/backups/<name>.<hash>.ai-backup.FCStd` instead of dropping an
+  `.ai-backup.FCStd` file beside the user's document. The project folder stays
+  clean; each source path maps to one stable, hash-tagged file that is
+  overwritten in place (collision-safe across same-named documents in different
+  folders). Builds on the #44 filename-accretion fix.
+
+### Added
+
+- **`max_backups` config knob** (#46, JSON-only) — count cap for the recovery
+  snapshots in `CONFIG_DIR/backups`, pruned via the shared `prune_oldest_files`
+  helper (also honours the existing `max_retention_age_days`). Defaults to `0`
+  (keep all) to preserve prior behavior on upgrade; growth is naturally bounded
+  since each document reuses one file. Recommended value if you want a hard cap:
+  `50`.
+
 ## [0.20.0-alpha] - 2026-07-22
 
 A feature release: the workbench can now connect *to* MCP servers by URL — the
