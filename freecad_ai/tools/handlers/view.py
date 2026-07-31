@@ -67,7 +67,7 @@ def _handle_capture_viewport(
     background: str = "Current",
 ) -> ToolResult:
     """Save a screenshot of the 3D viewport to a file."""
-    from ..utils.viewport import capture_viewport_image
+    from ...utils.viewport import capture_viewport_image
 
     img_bytes = capture_viewport_image(width, height, background)
     if img_bytes is None:
