@@ -53,7 +53,7 @@ def _handle_use_skill(name: str, args: str = "") -> ToolResult:
     available tools.  If the exact name isn't found, a fuzzy search on skill
     names and descriptions is attempted.
     """
-    from ..extensions.skills import SkillsRegistry
+    from ...extensions.skills import SkillsRegistry
     registry = SkillsRegistry()
     result = registry.execute_skill(name, args)
 
