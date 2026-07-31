@@ -101,8 +101,10 @@ that perform FreeCAD operations safely. Prefer using tools over generating raw c
 1. `create_primitive(shape_type="box", length=20, width=20, height=20, label="Die")` — note the returned `body_name`
 2. `fillet_edges` on all 12 edges (radius ~1–2 mm)
 3. `list_faces` on the body to identify each face (top, bottom, front, back, left, right)
-4. For each face, add pips with `create_primitive(operation="subtractive", body_name=..., shape_type="sphere", radius=1.5, ...)` positioned on the face — standard layout: 1 pip on one face, 6 pips on the opposite, etc.
-5. Call tools in sequence until the die is complete; do not stop after describing the steps."""
+4. For each face, add pips with `create_primitive(operation="subtractive", body_name=..., ...)` positioned on the face — standard layout: 1 pip on one face, 6 pips on the opposite, etc. Opposite faces sum to 7 (1↔6, 2↔5, 3↔4).
+   - Spherical pips (`shape_type="sphere"`) need no rotation — position alone is enough on every face.
+   - **Cylindrical pips** (`shape_type="cylinder"`) point along +Z by default, so a pip on a *side* face needs a rotation: top/bottom faces use no rotation, front/back faces use `rot_x=90` / `rot_x=-90`, left/right faces use `rot_y=90` / `rot_y=-90`. Sink the cylinder slightly into the face so it cuts (e.g. for a 20 mm cube with 1 mm deep pips, place the cylinder base at the face and give it `height` ≥ the depth).
+5. Call tools in sequence until the die is complete; do not stop after describing the steps. Keep every pip as a subtractive feature inside the SAME Body — never rebuild the die with raw `Part.makeBox`/`cut()` in `execute_code`, which produces a dead solid with no feature tree."""
 
 FREECAD_API_REFERENCE = """\
 ## FreeCAD Python API Reference (condensed)

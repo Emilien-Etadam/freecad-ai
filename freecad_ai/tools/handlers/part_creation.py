@@ -21,6 +21,9 @@ def _handle_create_primitive(
     x: float = 0.0,
     y: float = 0.0,
     z: float = 0.0,
+    rot_x: float = 0.0,
+    rot_y: float = 0.0,
+    rot_z: float = 0.0,
 ) -> ToolResult:
     """Create a PartDesign primitive (Box, Cylinder, Sphere, Cone, Torus) inside a Body."""
     import FreeCAD as App
@@ -91,12 +94,24 @@ def _handle_create_primitive(
             obj.Radius1 = radius
             obj.Radius2 = radius2
 
-        if x != 0 or y != 0 or z != 0:
+        # Cylinders and cones are Z-axis aligned by default, so cutting into a
+        # vertical face needs a rotation, not just a position (e.g. cylindrical
+        # pips on the side faces of a die). App.Rotation takes yaw/pitch/roll
+        # = Z/Y/X in degrees.
+        if rot_x or rot_y or rot_z:
+            obj.Placement = App.Placement(
+                App.Vector(x, y, z), App.Rotation(rot_z, rot_y, rot_x))
+        elif x != 0 or y != 0 or z != 0:
             obj.Placement.Base = App.Vector(x, y, z)
 
+        placement_note = ""
+        if rot_x or rot_y or rot_z:
+            placement_note = (f" at ({x}, {y}, {z}) rotated "
+                              f"({rot_x}, {rot_y}, {rot_z})°")
         return ToolResult(
             success=True,
-            output=f"Created {op} {st} '{obj.Label}' ({obj.Name}) in body '{body.Label}' ({body.Name})",
+            output=(f"Created {op} {st} '{obj.Label}' ({obj.Name}) in body "
+                    f"'{body.Label}' ({body.Name}){placement_note}"),
             data={"name": obj.Name, "label": obj.Label, "type": pd_type,
                   "body_name": body.Name, "body_label": body.Label},
         )
@@ -123,6 +138,17 @@ CREATE_PRIMITIVE = ToolDefinition(
         ToolParam("x", "number", "X position", required=False, default=0.0),
         ToolParam("y", "number", "Y position", required=False, default=0.0),
         ToolParam("z", "number", "Z position", required=False, default=0.0),
+        ToolParam("rot_x", "number",
+                  "Rotation about X in degrees. Cylinders/cones point along +Z by "
+                  "default — use rot_x=90 to aim one along -Y (e.g. a cylindrical "
+                  "pocket into a front face), rot_x=-90 for +Y",
+                  required=False, default=0.0),
+        ToolParam("rot_y", "number",
+                  "Rotation about Y in degrees. rot_y=90 aims a cylinder along +X, "
+                  "rot_y=-90 along -X (pockets into left/right faces)",
+                  required=False, default=0.0),
+        ToolParam("rot_z", "number", "Rotation about Z in degrees",
+                  required=False, default=0.0),
     ],
     handler=_handle_create_primitive,
 )
