@@ -305,6 +305,7 @@ SKILLS_DIR = os.path.join(CONFIG_DIR, "skills")
 USER_TOOLS_DIR = os.path.join(CONFIG_DIR, "tools")
 HOOKS_DIR = os.path.join(CONFIG_DIR, "hooks")
 LOGS_DIR = os.path.join(CONFIG_DIR, "logs")
+BACKUPS_DIR = os.path.join(CONFIG_DIR, "backups")
 
 
 def prune_oldest_files(
@@ -483,6 +484,10 @@ class AppConfig:
     max_saved_conversations: int = 0
     max_session_logs: int = 0
     max_retention_age_days: int = 0
+    # Pre-execution recovery snapshots kept in BACKUPS_DIR (#46). 0 = keep all;
+    # each source document reuses one hash-tagged file (overwritten), so growth
+    # is naturally bounded by the number of distinct documents ever edited.
+    max_backups: int = 0
 
     @property
     def supports_vision(self) -> bool:
@@ -522,7 +527,7 @@ class AppConfig:
 
 def _ensure_dirs():
     """Create config directories if they don't exist."""
-    for d in (CONFIG_DIR, CONVERSATIONS_DIR, SKILLS_DIR, USER_TOOLS_DIR, HOOKS_DIR, LOGS_DIR):
+    for d in (CONFIG_DIR, CONVERSATIONS_DIR, SKILLS_DIR, USER_TOOLS_DIR, HOOKS_DIR, LOGS_DIR, BACKUPS_DIR):
         os.makedirs(d, exist_ok=True)
 
 

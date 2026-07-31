@@ -34,6 +34,7 @@ class Skill:
     trigger: str = ""  # Slash command, e.g. "/thread-insert"
     has_handler: bool = False
     validation_path: str = ""
+    references: dict = field(default_factory=dict)  # key (lowercased stem) -> abspath
 
 
 class SkillsRegistry:
@@ -98,6 +99,19 @@ class SkillsRegistry:
             if os.path.isfile(val_file):
                 validation_path = val_file
 
+            # Tier-3 progressive disclosure: scan a sibling references/ dir
+            # (top level only) into a {key -> abspath} allowlist. The model
+            # later names a key, never a path, so traversal is impossible.
+            references = {}
+            refs_dir = os.path.join(skill_dir, "references")
+            if os.path.isdir(refs_dir):
+                for ref_entry in sorted(os.listdir(refs_dir)):
+                    ref_path = os.path.join(refs_dir, ref_entry)
+                    if not os.path.isfile(ref_path):
+                        continue
+                    key = os.path.splitext(ref_entry)[0].lower()
+                    references[key] = ref_path
+
             self._skills[entry] = Skill(
                 name=entry,
                 description=description,
@@ -106,6 +120,7 @@ class SkillsRegistry:
                 trigger=f"/{entry}",
                 has_handler=os.path.isfile(handler_path),
                 validation_path=validation_path,
+                references=references,
             )
 
     def register(self, name: str, content: str, trigger: str = ""):
@@ -179,8 +194,59 @@ class SkillsRegistry:
             if handler_result is not None:
                 return handler_result
 
-        # Default: inject SKILL.md content into the prompt
-        return {"inject_prompt": skill.content}
+        # Default: inject SKILL.md content into the prompt, plus a manifest of
+        # any on-demand reference files the skill bundles (tier-3 disclosure).
+        content = skill.content + self.render_references_manifest(skill)
+        return {"inject_prompt": content}
+
+    def render_references_manifest(self, skill: Skill) -> str:
+        """Markdown block advertising a skill's on-demand reference files."""
+        if not skill.references:
+            return ""
+        lines = [
+            "\n\n## Available references",
+            f"Load one when needed with "
+            f"use_skill(name='{skill.name}', resource='<key>'):",
+        ]
+        for key in sorted(skill.references):
+            summary = _reference_summary(skill.references[key])
+            bullet = f"- `{key}` (resource='{key}')"
+            if summary:
+                bullet += f" — {summary}"
+            lines.append(bullet)
+        return "\n".join(lines)
+
+    def get_skill_resource(self, name: str, resource: str) -> dict:
+        """Return the contents of a skill's reference file.
+
+        `resource` is a KEY into the pre-scanned Skill.references allowlist —
+        it is never treated as a filesystem path, so directory traversal is
+        impossible. The key may be given with or without an extension and is
+        matched case-insensitively.
+
+        Returns {"output": contents} or {"error": message}.
+        """
+        skill = self._skills.get(name)
+        if not skill:
+            return {"error": f"Unknown skill: {name}"}
+        if not skill.references:
+            return {"error": f"Skill '{name}' has no references."}
+
+        key = os.path.splitext(resource.strip())[0].lower()
+        path = skill.references.get(key)
+        if not path:
+            available = ", ".join(sorted(skill.references))
+            return {
+                "error": (
+                    f"Reference '{resource}' not found in skill '{name}'. "
+                    f"Available: {available}"
+                )
+            }
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return {"output": f.read()}
+        except (OSError, UnicodeDecodeError) as e:
+            return {"error": f"Could not read reference '{resource}': {e}"}
 
     def _run_handler(self, skill: Skill, args: str) -> dict | None:
         """Try to load and run a skill's handler.py.
@@ -302,6 +368,30 @@ class SkillsRegistry:
             shutil.rmtree(user_skill_dir)
             return True
         return False
+
+
+def _reference_summary(path: str) -> str:
+    """One-line summary of a reference file for the manifest.
+
+    Prefer the first non-empty, non-heading line (matching how skill
+    descriptions are extracted in _scan_skills_dir); fall back to the first
+    heading's text if the file is heading-only.
+    """
+    heading = ""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stripped.startswith("#"):
+                    if not heading:
+                        heading = stripped.lstrip("#").strip()
+                    continue
+                return stripped[:100]
+    except (OSError, UnicodeDecodeError):
+        pass
+    return heading[:100]
 
 
 def _file_hash(path: str) -> str:

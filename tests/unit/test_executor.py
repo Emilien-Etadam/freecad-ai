@@ -1,5 +1,7 @@
 """Tests for code execution engine — extract, validate, and safety checks."""
 
+import os
+
 import pytest
 
 from unittest.mock import patch
@@ -469,3 +471,98 @@ class TestCollectObjectIssues:
         ]
         issues = executor._collect_object_issues(objects_state, set())
         assert issues == ["Object 'Pad' has null shape"]
+
+
+class _FakeDoc:
+    """Minimal stand-in for the App::Document slice ``_auto_save`` touches.
+
+    Mirrors the surprising part of FreeCAD's ``saveAs``: it writes the file
+    *and* repoints ``FileName`` at the saved path, appending ``.FCStd`` when
+    the target lacks that extension (``.ai-backup`` -> ``.ai-backup.FCStd``).
+    """
+
+    def __init__(self, filename):
+        self.FileName = filename
+        self.saved_paths = []
+
+    def saveAs(self, path):
+        if not path.endswith(".FCStd"):
+            path += ".FCStd"
+        self.saved_paths.append(path)
+        self.FileName = path
+
+
+class TestAutoSave:
+    """Tests for ``_auto_save`` — issue #46 (managed backups dir) and the #45 /
+    PR #44 regression (the snapshot must not compound ``.FCStd`` onto the
+    document filename, and must overwrite one stable file rather than accrete)."""
+
+    def _run(self, doc, backups_dir):
+        with patch("freecad_ai.config.BACKUPS_DIR", backups_dir), patch(
+            "freecad_ai.core.active_document.resolve_active_document",
+            return_value=doc,
+        ):
+            executor._auto_save({})
+
+    def test_preserves_document_filename(self, tmp_path):
+        # After a backup the document must point at exactly the original path.
+        # The old code rebuilt it with ``.replace(".ai-backup", "")``, which
+        # left the ``.FCStd`` that saveAs appended, growing the name by one
+        # extension every call (#45).
+        doc = _FakeDoc("/tmp/part.FCStd")
+        self._run(doc, str(tmp_path))
+        assert doc.FileName == "/tmp/part.FCStd"
+
+    def test_backup_written_to_managed_dir(self, tmp_path):
+        # #46: the snapshot lands in the managed BACKUPS_DIR, not beside the
+        # user's document, and keeps the ``.ai-backup.FCStd`` suffix.
+        doc = _FakeDoc("/home/user/project/part.FCStd")
+        self._run(doc, str(tmp_path))
+        assert len(doc.saved_paths) == 1
+        saved = doc.saved_paths[0]
+        assert os.path.dirname(saved) == str(tmp_path)
+        assert saved.endswith(".ai-backup.FCStd")
+        # never written next to the source document
+        assert not saved.startswith("/home/user/project/")
+
+    def test_backup_path_is_stable_across_calls(self, tmp_path):
+        # Two executions overwrite one stable snapshot, never accrete (#45).
+        doc = _FakeDoc("/tmp/part.FCStd")
+        self._run(doc, str(tmp_path))
+        self._run(doc, str(tmp_path))
+        assert len(set(doc.saved_paths)) == 1
+
+    def test_collision_safe_for_same_basename(self, tmp_path):
+        # Two documents sharing a basename in different folders must map to
+        # distinct snapshot files (the hash tag prevents collisions).
+        doc_a = _FakeDoc("/projects/a/part.FCStd")
+        doc_b = _FakeDoc("/projects/b/part.FCStd")
+        self._run(doc_a, str(tmp_path))
+        self._run(doc_b, str(tmp_path))
+        assert doc_a.saved_paths[0] != doc_b.saved_paths[0]
+        for p in doc_a.saved_paths + doc_b.saved_paths:
+            assert os.path.dirname(p) == str(tmp_path)
+
+    def test_prunes_managed_dir(self, tmp_path):
+        # #46: bounded disk use — _auto_save prunes the managed dir with the
+        # shared helper, matching only .ai-backup.FCStd snapshots.
+        doc = _FakeDoc("/tmp/part.FCStd")
+        with patch("freecad_ai.config.BACKUPS_DIR", str(tmp_path)), patch(
+            "freecad_ai.config.prune_oldest_files"
+        ) as mock_prune, patch(
+            "freecad_ai.core.active_document.resolve_active_document",
+            return_value=doc,
+        ):
+            executor._auto_save({})
+        assert mock_prune.called
+        assert mock_prune.call_args[0][0] == str(tmp_path)
+        # the pattern predicate must accept our snapshots and reject foreign files
+        pattern_fn = mock_prune.call_args[0][1]
+        assert pattern_fn("part.abc12345.ai-backup.FCStd") is True
+        assert pattern_fn("something-else.json") is False
+
+    def test_no_backup_for_unsaved_document(self, tmp_path):
+        # An unsaved document (empty FileName) has nothing to snapshot.
+        doc = _FakeDoc("")
+        self._run(doc, str(tmp_path))
+        assert doc.saved_paths == []
