@@ -45,16 +45,24 @@ REPORT_SKILL_PARAMS = ToolDefinition(
 
 # ── use_skill ──────────────────────────────────────────────
 
-def _handle_use_skill(name: str, args: str = "") -> ToolResult:
-    """Load a skill's instructions and return them for the model to follow.
+def _handle_use_skill(name: str, args: str = "", resource: str = "") -> ToolResult:
+    """Load a skill's instructions (or one of its reference files) for the model.
 
-    The skill content (SKILL.md) is returned as the tool result. The model
-    should read these instructions and follow them step by step using its
-    available tools.  If the exact name isn't found, a fuzzy search on skill
-    names and descriptions is attempted.
+    With `resource` set, returns the contents of that reference file (tier-3
+    progressive disclosure — the key indexes a pre-scanned allowlist, never a
+    filesystem path). Otherwise returns SKILL.md plus a manifest of any
+    references the skill bundles. If the exact name isn't found, a fuzzy search
+    on skill names and descriptions is attempted.
     """
     from ...extensions.skills import SkillsRegistry
     registry = SkillsRegistry()
+
+    if resource:
+        res = registry.get_skill_resource(name, resource)
+        if "error" in res:
+            return ToolResult(success=False, output="", error=res["error"])
+        return ToolResult(success=True, output=res["output"])
+
     result = registry.execute_skill(name, args)
 
     if "error" in result:
@@ -96,13 +104,19 @@ USE_SKILL = ToolDefinition(
         "Load a skill's detailed instructions for a complex task. "
         "Skills provide step-by-step construction guides (e.g. enclosure, gear). "
         "Call this when the user's request matches a skill, then follow the "
-        "returned instructions using your tools."
+        "returned instructions using your tools. If the skill lists 'Available "
+        "references', pull one into context on demand by calling use_skill again "
+        "with the same name and the reference's `resource` key."
     ),
     parameters=[
         ToolParam("name", "string",
                   "Skill name (e.g. 'enclosure', 'gear', 'fastener-hole')"),
         ToolParam("args", "string",
                   "User's parameters for the skill (e.g. '120x80x60mm, screw lid')",
+                  required=False, default=""),
+        ToolParam("resource", "string",
+                  "Optional reference key from the skill's 'Available references' "
+                  "list, to load that reference file instead of the skill itself",
                   required=False, default=""),
     ],
     handler=_handle_use_skill,

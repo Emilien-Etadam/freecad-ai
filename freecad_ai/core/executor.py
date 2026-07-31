@@ -351,16 +351,37 @@ finally:
 
 
 def _auto_save(namespace: dict):
-    """Save a recovery copy of the active document before executing code."""
+    """Save a recovery copy of the active document before executing code.
+
+    Snapshots live in the managed ``BACKUPS_DIR`` under the extension's config
+    tree (#46), not beside the user's document — the project folder stays clean
+    and disk use is bounded. Each source path maps to one stable, hash-tagged
+    file that is overwritten in place, so same-named documents in different
+    folders never collide and no snapshot accretes across executions.
+    """
     try:
+        import hashlib
+        from ..config import BACKUPS_DIR, get_config, prune_oldest_files
         from .active_document import resolve_active_document
         doc = resolve_active_document()
         if not doc or not doc.FileName:
             return  # Unsaved document, nothing to back up
-        backup = doc.FileName + ".ai-backup"
+        original = doc.FileName
+        os.makedirs(BACKUPS_DIR, exist_ok=True)
+        stem = os.path.splitext(os.path.basename(original))[0]
+        tag = hashlib.sha1(original.encode("utf-8")).hexdigest()[:8]
+        backup = os.path.join(BACKUPS_DIR, f"{stem}.{tag}.ai-backup.FCStd")
         doc.saveAs(backup)
-        # Restore the original filename so the user doesn't notice
-        doc.FileName = doc.FileName.replace(".ai-backup", "")
+        # saveAs repoints FileName at the snapshot; restore the exact original
+        # so the path can't compound across calls (the #45 accretion).
+        doc.FileName = original
+        cfg = get_config()
+        prune_oldest_files(
+            BACKUPS_DIR,
+            lambda n: n.endswith(".ai-backup.FCStd"),
+            cfg.max_backups,
+            cfg.max_retention_age_days,
+        )
     except Exception:
         pass  # Best-effort
 

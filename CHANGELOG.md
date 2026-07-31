@@ -34,6 +34,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **Send appeared to do nothing after clicking the button** (`freecad_ai/ui/chat_dock/send.py`). MCP connection and LLM tool reranking ran on the main thread *before* the loading indicator appeared, freezing the UI for up to two minutes with no feedback. Loading/stream UI now shows immediately; setup errors are surfaced in chat and the Report View. The reranker LLM client uses a 30 s HTTP timeout so a dead provider falls back to keyword reranking quickly.
 
+## [0.21.0-alpha] - 2026-07-27
+
+A fix-and-cleanup release for the pre-execution recovery snapshots that
+`execute_code` writes before running generated code. Prompted by a contributor
+bug report (@FairlyInconspicuous) and a design proposal (@3dyuval).
+([#44](https://github.com/ghbalf/freecad-ai/pull/44), [#46](https://github.com/ghbalf/freecad-ai/issues/46), [#48](https://github.com/ghbalf/freecad-ai/pull/48))
+
+### Changed
+
+- **Recovery snapshots now live in a managed backups dir** (#46) — before each
+  `execute_code`, `_auto_save` writes the pre-execution snapshot to
+  `CONFIG_DIR/backups/<name>.<hash>.ai-backup.FCStd` instead of dropping an
+  `.ai-backup.FCStd` file beside the user's document. The project folder stays
+  clean; each source path maps to one stable, hash-tagged file that is
+  overwritten in place (collision-safe across same-named documents in different
+  folders). Builds on the #44 filename-accretion fix.
+
+### Added
+
+- **`max_backups` config knob** (#46, JSON-only) — count cap for the recovery
+  snapshots in `CONFIG_DIR/backups`, pruned via the shared `prune_oldest_files`
+  helper (also honours the existing `max_retention_age_days`). Defaults to `0`
+  (keep all) to preserve prior behavior on upgrade; growth is naturally bounded
+  since each document reuses one file. Recommended value if you want a hard cap:
+  `50`.
+
+### Fixed
+
+- **Auto-save no longer compounds `.FCStd` onto the document filename** (#44,
+  thanks @FairlyInconspicuous) — `_auto_save` rebuilt the document path by
+  string-editing the name FreeCAD's `saveAs` had already mutated, leaving a
+  trailing `.FCStd` and growing the filename by one extension on every
+  `execute_code` call (and littering the folder with never-reused snapshots).
+  It now captures and restores the original path verbatim. Ships with unit-lane
+  regression coverage.
+
+## [0.20.0-alpha] - 2026-07-22
+
+A feature release: the workbench can now connect *to* MCP servers by URL — the
+client-side counterpart to the v0.17.0-alpha HTTP/SSE server transport. Prompted
+by a forum question from hardeeprai. ([#41](https://github.com/ghbalf/freecad-ai/issues/41), [#42](https://github.com/ghbalf/freecad-ai/pull/42))
+
+### Added
+
+- **Connect to MCP servers by URL** (#41) — new HTTP/SSE **client** transports
+  alongside STDIO: a legacy HTTP+SSE client and a Streamable HTTP client,
+  selectable per server in Add MCP Server. Supports remote `https://`, custom
+  auth headers, and optional custom CA bundle / client certificate (mTLS).
+  Plain `http://` is allowed only to localhost. Still zero external
+  dependencies. This is the client counterpart to the v0.17.0-alpha HTTP/SSE
+  server transport.
+
+## [0.19.0-alpha] - 2026-07-22
+
+A feature-and-fix release bundling a new skills capability with two fixes from
+issues filed by @3dyuval.
+
+### Added
+
+- **Skill `references/` — on-demand reference files (tier-3 progressive disclosure)** (`freecad_ai/extensions/skills.py`, `freecad_ai/tools/freecad_tools.py`). A skill can now ship a `references/` subdirectory of markdown files that the model loads only when a task needs them, keeping `SKILL.md` lean. The loader scans `references/` into a per-skill `{key → path}` allowlist; `use_skill` gains an optional `resource` argument (`use_skill(name, resource="freecad-gotchas")`) that returns a reference file's contents; and a skill with references gets an auto-generated "Available references" manifest appended to its `SKILL.md` result, advertising each key and the exact call to load it. The model passes a **key**, never a path — it is looked up in the pre-scanned allowlist, so directory traversal is impossible by construction. Fully additive: skills without a `references/` directory are unchanged. `scripts/`/`assets/` remain out of scope (an execute surface is a separate proposal). ([#37](https://github.com/ghbalf/freecad-ai/issues/37); thanks @3dyuval)
+
+### Fixed
+
+- **Custom OpenAI-compatible providers no longer silently drop the tools array** (`freecad_ai/llm/providers.py`). The `custom` provider preset defaulted to `supports_tools: False`, and since the per-model tool-capability probe is Ollama-only, that static flag was the sole source of truth for custom endpoints — so tool calling was silently disabled on every request. Most custom servers (vLLM, llama.cpp `--jinja`, SGLang) support tool calling, so the default is now `True`; a genuinely tool-less endpoint opts out with `tools_detected: false` in `config.json`. ([#38](https://github.com/ghbalf/freecad-ai/issues/38); thanks @3dyuval)
+
+### Changed
+
+- **`execute_code` now tells the model its state does not persist between calls** (`freecad_ai/tools/freecad_tools.py`). Each `execute_code` call runs in a fresh namespace, but nothing signalled that, so models chained variables and imports across calls, hit a `NameError`, and looped to the tool-turn limit. The tool description now states that each call is self-contained (re-fetch objects every call; a `NameError` means a reference to an earlier call's name, not a wrong query). ([#39](https://github.com/ghbalf/freecad-ai/issues/39); thanks @3dyuval)
+
 ## [0.18.0-alpha] - 2026-07-04
 
 A small feature-and-fix release bundling two community contributions from

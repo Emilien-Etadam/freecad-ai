@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from ..tools.registry import ToolDefinition, ToolParam, ToolResult, ToolRegistry
-from .client import MCPClient, MCPToolInfo, MCPToolResult
+from .client import MCPClient, MCPToolInfo, MCPToolResult, make_client_transport
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +51,10 @@ class MCPManager:
             if only_deferred is not None and deferred != only_deferred:
                 continue
 
-            command = [cfg["command"]] + cfg.get("args", [])
-            env = cfg.get("env") or None
-
             try:
+                transport = make_client_transport(cfg)
                 tool_call_timeout = float(cfg.get("timeout", 600))
-                client = MCPClient(name, command, env, deferred=deferred,
+                client = MCPClient(name, transport=transport, deferred=deferred,
                                    tool_call_timeout=tool_call_timeout)
                 client.connect()
                 self._clients[name] = client

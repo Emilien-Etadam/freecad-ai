@@ -59,3 +59,25 @@ class TestExecuteCodeDescription:
         desc = EXECUTE_CODE.description.lower()
         assert "last-resort" in desc or "last resort" in desc
         assert "create_sketch" in desc
+
+    def test_warns_state_does_not_persist_between_calls(self):
+        """Issue #39: each execute_code call runs in a fresh namespace.
+
+        Nothing signalled this, so models chained `x = ...` across calls,
+        hit NameError, misread it as a wrong query, and looped until the
+        turn budget was exhausted. The description must tell the model each
+        call is self-contained so it stops chaining state."""
+        desc = EXECUTE_CODE.description.lower()
+        # The statelessness must be stated…
+        assert "fresh namespace" in desc or "does not persist" in desc \
+            or "do not persist" in desc
+        # …and the actionable consequence spelled out.
+        assert "self-contained" in desc
+
+
+class TestUseSkillDescription:
+    def test_advertises_resource_two_step(self):
+        from freecad_ai.tools.freecad_tools import USE_SKILL
+        desc = USE_SKILL.description.lower()
+        assert "resource" in desc
+        assert "reference" in desc
