@@ -8,51 +8,6 @@ from ..tool_common import *  # noqa: F403
 
 # ── create_primitive ────────────────────────────────────────
 
-def _body_shape_stats(body):
-    """Return ``(volume, shell_count)`` of a body's shape, or ``(None, None)``.
-
-    None means "not measurable" (no Tip yet, shape not computed) — the caller
-    then simply skips the cut check rather than guessing.
-    """
-    try:
-        shape = body.Shape
-        return shape.Volume, len(shape.Shells)
-    except Exception:
-        return None, None
-
-
-def _subtractive_cut_note(operation, before_volume, after_volume,
-                          before_shells, after_shells) -> str:
-    """Report a subtractive feature that cut nothing or buried a void.
-
-    Pure, so it is testable without FreeCAD. A pocket placed entirely outside
-    the solid removes no material; one placed entirely inside it hollows out
-    an invisible cavity (visible as an extra shell). Both look like success —
-    the feature is created and valid — while the model is silently wrong.
-    """
-    if operation != "subtractive":
-        return ""
-    if before_volume is None or after_volume is None:
-        return ""
-
-    removed = before_volume - after_volume
-    if removed <= 1e-6:
-        return ("  [!] This removed NO material — the shape lies entirely "
-                "outside the body. A primitive starts at its placement point "
-                "and extends along its local +Z (rotated by rot_x/rot_y/rot_z), "
-                "so it must cross the surface: start it ON or slightly outside "
-                "the face and give it enough height to reach inside.")
-
-    if (before_shells is not None and after_shells is not None
-            and after_shells > before_shells):
-        return ("  [!] This cut an INTERNAL VOID ({:.1f} mm³ hollowed out "
-                "below the surface, not visible from outside). Move the "
-                "primitive so it crosses the face instead of sitting entirely "
-                "inside the solid.".format(removed))
-
-    return "  (removed {:.1f} mm³)".format(removed)
-
-
 def _handle_create_primitive(
     shape_type: str,
     label: str = "",

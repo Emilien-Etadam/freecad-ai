@@ -15,6 +15,7 @@ from ..core.executor import execute_code
 __all__ = [
     "ToolParam", "ToolDefinition", "ToolResult", "execute_code", "os",
     "_coerce_str_list", "_with_undo",
+    "_body_shape_stats", "_subtractive_cut_note",
     "_get_body_plane", "_get_body_axis",
     "_resolve_sketch_attachment", "_resolve_datum_plane_attachment",
     "_PLANE_TYPE_IDS", "_classify_support", "_owning_body_name",
@@ -83,6 +84,52 @@ def _with_undo(label: str, func, *, create_document_if_missing: bool = False):
         except Exception:
             pass
         return ToolResult(success=False, output="", error=str(e))
+
+
+def _body_shape_stats(body):
+    """Return ``(volume, shell_count)`` of a body's shape, or ``(None, None)``.
+
+    None means "not measurable" (no Tip yet, shape not computed) — the caller
+    then simply skips the cut check rather than guessing.
+    """
+    try:
+        shape = body.Shape
+        return shape.Volume, len(shape.Shells)
+    except Exception:
+        return None, None
+
+
+def _subtractive_cut_note(operation, before_volume, after_volume,
+                          before_shells, after_shells) -> str:
+    """Report a subtractive feature that cut nothing or buried a void.
+
+    Pure, so it is testable without FreeCAD. A pocket placed entirely outside
+    the solid removes no material; one placed entirely inside it hollows out
+    an invisible cavity (visible as an extra shell). Both look like success —
+    the feature is created and valid — while the model is silently wrong.
+    """
+    if operation != "subtractive":
+        return ""
+    if before_volume is None or after_volume is None:
+        return ""
+
+    removed = before_volume - after_volume
+    if removed <= 1e-6:
+        return ("  [!] This removed NO material — the cutting shape never "
+                "reaches the solid. A primitive starts at its placement point "
+                "and extends along its local +Z (rotated by rot_x/rot_y/rot_z), "
+                "and a pocket runs from its sketch plane; either way the cut "
+                "must CROSS the target face, so start it on or slightly outside "
+                "the face and give it enough depth to reach inside.")
+
+    if (before_shells is not None and after_shells is not None
+            and after_shells > before_shells):
+        return ("  [!] This cut an INTERNAL VOID ({:.1f} mm³ hollowed out "
+                "below the surface, not visible from outside). Move the "
+                "primitive so it crosses the face instead of sitting entirely "
+                "inside the solid.".format(removed))
+
+    return "  (removed {:.1f} mm³)".format(removed)
 
 
 def _get_body_plane(body, plane_name: str):

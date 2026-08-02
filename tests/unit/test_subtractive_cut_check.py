@@ -7,7 +7,7 @@ sat entirely inside it (hollowing invisible cavities, visible only as
 extra shells in the shape). Nothing in the result hinted at either.
 """
 
-from freecad_ai.tools.handlers.part_creation import (
+from freecad_ai.tools.tool_common import (
     _body_shape_stats,
     _subtractive_cut_note,
 )
@@ -46,7 +46,7 @@ class TestCutNote:
     def test_no_material_removed_is_flagged(self):
         note = _subtractive_cut_note("subtractive", 100.0, 100.0, 1, 1)
         assert "NO material" in note
-        assert "outside" in note
+        assert "never reaches" in note
         # the note must explain the placement convention that caused it
         assert "+Z" in note
 
@@ -100,3 +100,22 @@ class TestWiring:
             assert face in pattern
         assert "height=2" in pattern
         assert "INTERNAL VOID" in pattern  # tells the model to react to the note
+
+    def test_pocket_sketch_reports_its_cut_too(self):
+        """The same silent failure exists for sketch pockets."""
+        import inspect
+        from freecad_ai.tools.handlers import sketch
+
+        src = inspect.getsource(sketch._handle_pocket_sketch)
+        assert "_subtractive_cut_note(" in src
+        assert "shells_before" in src
+
+    def test_helpers_shared_via_tool_common(self):
+        """Both handlers must see the helpers through the star import."""
+        from freecad_ai.tools import tool_common
+        from freecad_ai.tools.handlers import part_creation, sketch
+
+        assert "_subtractive_cut_note" in tool_common.__all__
+        assert "_body_shape_stats" in tool_common.__all__
+        for mod in (part_creation, sketch):
+            assert hasattr(mod, "_subtractive_cut_note"), mod.__name__
