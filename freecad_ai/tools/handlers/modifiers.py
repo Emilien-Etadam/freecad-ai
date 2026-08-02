@@ -653,6 +653,8 @@ def _handle_linear_pattern(
         pattern.Length = length
         pattern.Occurrences = occurrences
 
+        body.Tip = pattern
+
         try:
             doc.recompute()
         except Exception:
@@ -735,6 +737,10 @@ def _handle_polar_pattern(
 
         pattern.Angle = angle
         pattern.Occurrences = occurrences
+        # newObject() appends the feature but does NOT always advance the Body's
+        # Tip. Without this the pattern sits in the tree while the shape is still
+        # computed up to the previous feature — it contributes nothing, silently.
+        body.Tip = pattern
 
         # Recompute inside the transaction so the pattern's real effect can be
         # measured: a pattern that adds no occurrence looks identical to one
@@ -913,6 +919,8 @@ def _handle_mirror_feature(
                     return ToolResult(success=False, output="", error=f"Reference object '{parts[0]}' not found")
             else:
                 return ToolResult(success=False, output="", error=f"Invalid plane: {plane}. Use XY/XZ/YZ or Sketch.N_Axis")
+
+        body.Tip = mirror
 
         try:
             doc.recompute()
