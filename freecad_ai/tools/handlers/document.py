@@ -525,11 +525,60 @@ EXPORT_MODEL = ToolDefinition(
 
 # ── execute_code ────────────────────────────────────────────
 
+def _static_solid_names(doc) -> set:
+    """Names of non-parametric solids (``Part::Feature`` carrying a solid).
+
+    These are "dead" bodies: their Shape is stored geometry with no recipe
+    behind it, so nothing in them can be edited afterwards. Legitimate for
+    imports and mesh→solid conversion — the caller only reports the ones a
+    given ``execute_code`` call introduced.
+    """
+    if doc is None:
+        return set()
+    names = set()
+    for obj in getattr(doc, "Objects", []):
+        if getattr(obj, "TypeId", "") != "Part::Feature":
+            continue
+        try:
+            if obj.Shape.Solids:
+                names.add(obj.Name)
+        except Exception:
+            pass
+    return names
+
+
+def _dead_solid_notice(new_static: set, has_parametric_body: bool) -> str:
+    """Warning text when code created a static solid. "" when there is none.
+
+    Pure so it is testable without FreeCAD. The wording is aimed at the
+    model: it is not an error (the code ran), but the result has no feature
+    tree, which is almost never what a modelling request wants.
+    """
+    if not new_static:
+        return ""
+    names = ", ".join(sorted(new_static))
+    note = ("\n\n[!] This created a NON-PARAMETRIC solid ({}): a Part::Feature "
+            "stores only the final shape, so it has no feature tree and nothing "
+            "in it can be edited afterwards.".format(names))
+    if has_parametric_body:
+        note += (" The document already has a PartDesign Body — append features "
+                 "to it (create_primitive with body_name, pocket_sketch, "
+                 "fillet_edges…) instead of rebuilding the part with raw Part "
+                 "booleans.")
+    else:
+        note += (" If the user asked for an editable model, rebuild it with the "
+                 "PartDesign tools (create_body → create_sketch → pad_sketch, or "
+                 "create_primitive) rather than Part.makeBox/cut().")
+    return note
+
+
 def _handle_execute_code(code: str) -> ToolResult:
     """Execute arbitrary Python code (fallback tool)."""
     from ...core.active_document import resolve_active_document
     from ...core.dangerous_mode import get_dangerous_mode
     from .. import freecad_tools
+
+    before_static = _static_solid_names(resolve_active_document())
 
     result = freecad_tools.execute_code(code, skip_safety=get_dangerous_mode().active)
     if result.success:
@@ -538,6 +587,15 @@ def _handle_execute_code(code: str) -> ToolResult:
         data = {"stdout": result.stdout}
         if doc:
             data["document"] = doc.Name
+        # Flag dead solids this call introduced — non-blocking: the code did
+        # run, but a static shape is almost never what a modelling request
+        # wanted, and silently returning "success" hides that from everyone.
+        new_static = _static_solid_names(doc) - before_static
+        if new_static:
+            has_body = any(getattr(o, "TypeId", "") == "PartDesign::Body"
+                           for o in getattr(doc, "Objects", []))
+            output += _dead_solid_notice(new_static, has_body)
+            data["static_solids"] = sorted(new_static)
         return ToolResult(success=True, output=output, data=data)
     else:
         return ToolResult(success=False, output=result.stdout, error=result.stderr)

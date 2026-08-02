@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`execute_code` reports the dead solids it creates** (`freecad_ai/tools/handlers/document.py`). A `Part::Feature` stores only the final B-Rep — no feature tree, nothing editable afterwards. When a modelling request ended up rebuilt with raw `Part.makeBox`/`cut()`, the tool returned a plain "success" and the dead body was only discovered by looking at the model tree. The result now carries a warning naming the object and pointing at the parametric route (append to the existing Body, or rebuild with `create_body`/`create_sketch`/`pad_sketch`). Non-blocking by design: imports and mesh→solid conversion legitimately produce static solids, and only the ones a given call introduced are reported.
+
 - **`create_primitive` accepts a rotation** (`freecad_ai/tools/handlers/part_creation.py`). New optional `rot_x` / `rot_y` / `rot_z` parameters (degrees, applied as FreeCAD's yaw/pitch/roll). Cylinders and cones are Z-axis aligned, so a subtractive cylinder could previously only cut into a horizontal face — "cylindrical pockets on every face of a die" was impossible with the structured tools, and the model fell back to raw `Part.makeBox`/`cut()` in `execute_code`, producing a dead solid with no feature tree. Position-only calls keep their original placement path unchanged.
 
 ### Changed
