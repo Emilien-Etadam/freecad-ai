@@ -547,33 +547,49 @@ def _static_solid_names(doc) -> set:
     return names
 
 
-def _dead_solid_notice(new_static: set, has_parametric_body: bool) -> str:
-    """Warning text when code created a static solid. "" when there is none.
+# Import APIs that legitimately produce a static solid. There is no
+# import_model tool, so a STEP/STL/mesh import has to go through
+# execute_code — blocking those would leave no way to load a file at all.
+_IMPORT_API_MARKERS = (
+    "Import.insert", "Import.open", "Import.read",
+    "ImportGui.insert", "ImportGui.open",
+    "Mesh.insert", "Mesh.open", "MeshPart",
+    "importDXF", "importSVG", "importOBJ", "importCSG",
+    "Part.insert", "Part.open", "Part.read",
+    "App.openDocument", "FreeCAD.openDocument",
+)
 
-    Pure so it is testable without FreeCAD. The wording is aimed at the
-    model: it is not an error (the code ran), but the result has no feature
-    tree, which is almost never what a modelling request wants.
+
+def _code_performs_import(code: str) -> bool:
+    """True when the executed code loads geometry from a file."""
+    return any(marker in code for marker in _IMPORT_API_MARKERS)
+
+
+def _dead_solid_error(new_static: set, has_parametric_body: bool) -> str:
+    """Refusal text when code created a static solid. Pure — testable headless.
+
+    Aimed at the model: state the rule, name the offending object, and give
+    the parametric route to redo the work.
     """
-    if not new_static:
-        return ""
     names = ", ".join(sorted(new_static))
-    note = ("\n\n[!] This created a NON-PARAMETRIC solid ({}): a Part::Feature "
-            "stores only the final shape, so it has no feature tree and nothing "
-            "in it can be edited afterwards.".format(names))
+    msg = ("Refused: this code created a NON-PARAMETRIC solid ({}) and was "
+           "rolled back. A Part::Feature stores only the final shape — no "
+           "feature tree, nothing editable afterwards — and static solids are "
+           "not allowed in this workbench.".format(names))
     if has_parametric_body:
-        note += (" The document already has a PartDesign Body — append features "
-                 "to it (create_primitive with body_name, pocket_sketch, "
-                 "fillet_edges…) instead of rebuilding the part with raw Part "
-                 "booleans.")
+        msg += (" Redo it by appending features to the existing PartDesign Body: "
+                "create_primitive(body_name=…, operation='subtractive'|'additive'), "
+                "pocket_sketch, pad_sketch, fillet_edges…")
     else:
-        note += (" If the user asked for an editable model, rebuild it with the "
-                 "PartDesign tools (create_body → create_sketch → pad_sketch, or "
-                 "create_primitive) rather than Part.makeBox/cut().")
-    return note
+        msg += (" Redo it with the PartDesign tools: create_body → create_sketch → "
+                "pad_sketch/pocket_sketch, or create_primitive — never "
+                "Part.makeBox/makeFillet/cut() bound to a Part::Feature.")
+    return msg
 
 
 def _handle_execute_code(code: str) -> ToolResult:
     """Execute arbitrary Python code (fallback tool)."""
+    from ...config import get_config
     from ...core.active_document import resolve_active_document
     from ...core.dangerous_mode import get_dangerous_mode
     from .. import freecad_tools
@@ -587,15 +603,29 @@ def _handle_execute_code(code: str) -> ToolResult:
         data = {"stdout": result.stdout}
         if doc:
             data["document"] = doc.Name
-        # Flag dead solids this call introduced — non-blocking: the code did
-        # run, but a static shape is almost never what a modelling request
-        # wanted, and silently returning "success" hides that from everyone.
+        # Dead solids are forbidden: roll the call back and make the model
+        # redo the work parametrically. Two exemptions — a file import (no
+        # import tool exists, so execute_code is the only route) and an
+        # explicit allow_static_solids opt-in in config.json.
         new_static = _static_solid_names(doc) - before_static
         if new_static:
-            has_body = any(getattr(o, "TypeId", "") == "PartDesign::Body"
-                           for o in getattr(doc, "Objects", []))
-            output += _dead_solid_notice(new_static, has_body)
-            data["static_solids"] = sorted(new_static)
+            allowed = bool(getattr(get_config(), "allow_static_solids", False))
+            if allowed or _code_performs_import(code):
+                data["static_solids"] = sorted(new_static)
+            else:
+                has_body = any(getattr(o, "TypeId", "") == "PartDesign::Body"
+                               for o in getattr(doc, "Objects", []))
+                error = _dead_solid_error(new_static, has_body)
+                # execute_code commits its own "AI Code Execution" transaction,
+                # so undo() is what reverts it — leaving the document exactly
+                # as it was before the refused call.
+                try:
+                    doc.undo()
+                    doc.recompute()
+                except Exception:
+                    error += (" (Automatic rollback failed — remove {} manually.)"
+                              .format(", ".join(sorted(new_static))))
+                return ToolResult(success=False, output=result.stdout, error=error)
         return ToolResult(success=True, output=output, data=data)
     else:
         return ToolResult(success=False, output=result.stdout, error=result.stderr)
@@ -603,7 +633,7 @@ def _handle_execute_code(code: str) -> ToolResult:
 
 EXECUTE_CODE = ToolDefinition(
     name="execute_code",
-    description="Execute arbitrary Python code in FreeCAD's interpreter. LAST-RESORT fallback for operations no structured tool covers — check the tool list first. Do NOT use it to re-implement a covered operation (e.g. attaching a sketch to a face is `create_sketch`, not a hand-written AttachmentSupport macro). The code has access to FreeCAD, Part, PartDesign, Sketcher, Draft modules. Each call runs in a fresh namespace — variables, imports, and objects do NOT persist between calls, so make every call fully self-contained (re-fetch objects with getObject/getObjectsByLabel each time; a NameError means you referenced a name from an earlier call, not that your query was wrong).",
+    description="Execute arbitrary Python code in FreeCAD's interpreter. LAST-RESORT fallback for operations no structured tool covers — check the tool list first. Do NOT use it to re-implement a covered operation (e.g. attaching a sketch to a face is `create_sketch`, not a hand-written AttachmentSupport macro). The code has access to FreeCAD, Part, PartDesign, Sketcher, Draft modules. Each call runs in a fresh namespace — variables, imports, and objects do NOT persist between calls, so make every call fully self-contained (re-fetch objects with getObject/getObjectsByLabel each time; a NameError means you referenced a name from an earlier call, not that your query was wrong). NON-PARAMETRIC SOLIDS ARE REFUSED: code that leaves a raw Part::Feature solid behind (Part.makeBox/makeFillet/cut bound to addObject('Part::Feature')) is rolled back and returns an error — build solids with the PartDesign tools instead. File imports (STEP/STL/mesh) are exempt.",
     category="general",
     parameters=[
         ToolParam("code", "string", "Python code to execute"),

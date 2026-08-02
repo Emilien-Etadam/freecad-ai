@@ -489,6 +489,13 @@ class AppConfig:
     # is naturally bounded by the number of distinct documents ever edited.
     max_backups: int = 0
 
+    # Allow execute_code to leave a non-parametric solid (Part::Feature with a
+    # solid shape) in the document. Off by default: a static solid has no
+    # feature tree and nothing in it can be edited afterwards, so a modelling
+    # request that ends up rebuilt with raw Part booleans is refused and rolled
+    # back. File imports are exempt regardless of this flag. JSON-only.
+    allow_static_solids: bool = False
+
     @property
     def supports_vision(self) -> bool:
         """Whether the current LLM supports vision (images in content blocks)."""

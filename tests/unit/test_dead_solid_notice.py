@@ -1,15 +1,17 @@
-"""execute_code flags the dead solids it introduces.
+"""Dead solids are forbidden: execute_code refuses and rolls them back.
 
 A `Part::Feature` stores only the final B-Rep — no feature tree, nothing
-editable afterwards. When a modelling request ends up rebuilt with raw
-`Part.makeBox`/`cut()`, the tool used to return a plain "success" and the
-user only discovered the dead body by looking at the tree. The result now
-carries a warning, without failing the call (imports and mesh→solid
-conversion legitimately produce static solids).
+editable afterwards. Code that leaves one behind is undone and returns an
+error telling the model to rebuild with the PartDesign tools. Two
+exemptions: a file import (there is no import tool, so execute_code is
+the only route) and the `allow_static_solids` opt-in in config.json.
 """
 
+import inspect
+
 from freecad_ai.tools.handlers.document import (
-    _dead_solid_notice,
+    _code_performs_import,
+    _dead_solid_error,
     _static_solid_names,
 )
 
@@ -61,39 +63,86 @@ class TestStaticSolidDetection:
         assert _static_solid_names(doc) == set()
 
 
-class TestNotice:
-    def test_silent_when_nothing_new(self):
-        assert _dead_solid_notice(set(), False) == ""
+class TestImportExemption:
+    def test_step_import_exempt(self):
+        assert _code_performs_import("import Import\nImport.insert('/tmp/p.step', doc.Name)")
 
-    def test_names_the_object(self):
-        note = _dead_solid_notice({"Shape001"}, False)
-        assert "Shape001" in note
-        assert "NON-PARAMETRIC" in note
+    def test_mesh_import_exempt(self):
+        assert _code_performs_import("Mesh.insert('/tmp/part.stl')")
+
+    def test_plain_modelling_not_exempt(self):
+        code = ("import Part\nbox = Part.makeBox(20,20,20)\n"
+                "doc.addObject('Part::Feature','Die').Shape = box")
+        assert not _code_performs_import(code)
+
+
+class TestRefusalMessage:
+    def test_names_the_object_and_states_the_rule(self):
+        msg = _dead_solid_error({"Shape001"}, False)
+        assert "Shape001" in msg
+        assert "NON-PARAMETRIC" in msg
+        assert "rolled back" in msg
 
     def test_points_at_existing_body_when_one_exists(self):
-        note = _dead_solid_notice({"Shape"}, True)
-        assert "PartDesign Body" in note
-        assert "body_name" in note
+        msg = _dead_solid_error({"Shape"}, True)
+        assert "PartDesign Body" in msg
+        assert "body_name" in msg
 
     def test_suggests_rebuild_when_no_body(self):
-        note = _dead_solid_notice({"Shape"}, False)
-        assert "create_body" in note or "PartDesign tools" in note
+        msg = _dead_solid_error({"Shape"}, False)
+        assert "create_body" in msg
 
     def test_lists_several_names_sorted(self):
-        note = _dead_solid_notice({"B", "A"}, False)
-        assert "A, B" in note
+        assert "A, B" in _dead_solid_error({"B", "A"}, False)
 
 
 class TestHandlerWiring:
-    def test_notice_is_non_blocking(self):
-        """The warning must ride on a successful result, not fail the call —
-        imports and mesh→solid conversion legitimately create static solids."""
-        import inspect
+    def _src(self):
         from freecad_ai.tools.handlers import document
+        return inspect.getsource(document._handle_execute_code)
 
-        src = inspect.getsource(document._handle_execute_code)
-        assert "_dead_solid_notice" in src
-        assert "before_static" in src  # only NEW static solids are reported
-        # the notice is appended to a success result
-        assert "output += _dead_solid_notice" in src
-        assert "ToolResult(success=True" in src
+    def test_refuses_and_rolls_back(self):
+        src = self._src()
+        assert "ToolResult(success=False" in src
+        assert "doc.undo()" in src          # revert the committed transaction
+        assert "_dead_solid_error" in src
+
+    def test_only_new_static_solids_count(self):
+        src = self._src()
+        assert "before_static" in src
+        assert "- before_static" in src
+
+    def test_exemptions_wired(self):
+        src = self._src()
+        assert "_code_performs_import(code)" in src
+        assert "allow_static_solids" in src
+
+    def test_rollback_failure_is_reported(self):
+        src = self._src()
+        assert "Automatic rollback failed" in src
+
+
+class TestConfigKnob:
+    def test_defaults_to_forbidding(self):
+        from freecad_ai.config import AppConfig
+        assert AppConfig().allow_static_solids is False
+
+    def test_round_trips_through_json(self):
+        import dataclasses
+        from freecad_ai.config import AppConfig
+
+        d = dataclasses.asdict(AppConfig())
+        assert "allow_static_solids" in d
+
+
+class TestModelIsTold:
+    def test_act_prompt_states_the_ban(self):
+        from freecad_ai.core import system_prompt
+        src = inspect.getsource(system_prompt)
+        assert "Non-parametric solids are FORBIDDEN" in src
+        assert "Part.makeBox()" in src
+
+    def test_tool_description_states_the_ban(self):
+        from freecad_ai.tools.freecad_tools import EXECUTE_CODE
+        assert "NON-PARAMETRIC SOLIDS ARE REFUSED" in EXECUTE_CODE.description
+        assert "imports" in EXECUTE_CODE.description.lower()

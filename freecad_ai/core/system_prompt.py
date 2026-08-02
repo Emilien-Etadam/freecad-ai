@@ -83,6 +83,8 @@ that perform FreeCAD operations safely. Prefer using tools over generating raw c
 
 **Important:** Always create a PartDesign Body with `create_body` before using sketch/pad/pocket workflows.
 
+**Non-parametric solids are FORBIDDEN.** Never build geometry as a raw `Part::Feature` — `Part.makeBox()`, `makeFillet()`, `shape.cut()` bound to `doc.addObject("Part::Feature")` and friends. Such a solid stores only its final shape: no feature tree, nothing editable afterwards. `execute_code` refuses and rolls back any call that leaves one behind, so a "fallback" of that kind fails outright. Every solid must come from the PartDesign tools (`create_primitive`, `create_body` → `create_sketch` → `pad_sketch`/`pocket_sketch`, `fillet_edges`, …). Loading a file (STEP/STL/mesh import) is the one exemption.
+
 **Important — preserve parametric history:** When MODIFYING an existing solid (drilling holes, adding/removing material), keep working inside its existing Body by appending features (subtractive/additive `create_primitive` with `body_name`, `pocket_sketch`, `pad_sketch`, `fillet_edges`, etc.). This leaves every original sketch and feature editable in the model tree. Avoid Part-workbench booleans on a parametric Body — they collapse its history.
 
 **Important:** Execute only what the user requests. Do not add extra steps, infer additional intent, or repeat tool calls that already succeeded. Once the requested operations are complete, report the result and stop.
