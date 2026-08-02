@@ -173,6 +173,7 @@ class ChatDockSessionMixin:
                 cfg.max_retention_age_days,
             )
 
+            self._last_log_path = filepath
             self._append_html(self._render_message(
                 "system",
                 translate("ChatDockWidget", "Session log saved to: {}").format(filepath)
@@ -182,6 +183,74 @@ class ChatDockSessionMixin:
                 "system",
                 translate("ChatDockWidget", "Failed to save log: {}").format(e)
             ))
+
+    def _latest_log_path(self):
+        """Path of the log to act on: the last one saved, else the newest.
+
+        Falls back to scanning LOGS_DIR so Open/Copy work right after a
+        restart, before this session has saved anything itself.
+        """
+        import os
+
+        path = getattr(self, "_last_log_path", "")
+        if path and os.path.exists(path):
+            return path
+        try:
+            names = [n for n in os.listdir(LOGS_DIR)
+                     if n.startswith("session_") and n.endswith(".json")]
+        except OSError:
+            return ""
+        if not names:
+            return ""
+        newest = max(names, key=lambda n: os.path.getmtime(os.path.join(LOGS_DIR, n)))
+        return os.path.join(LOGS_DIR, newest)
+
+    def _open_session_log(self):
+        """Open the latest session log in the OS default application."""
+        path = self._latest_log_path()
+        if not path:
+            self._append_html(self._render_message(
+                "system",
+                translate("ChatDockWidget",
+                          "No session log yet — click Save Log first.")))
+            return
+        opened = False
+        try:  # Qt handles Windows/macOS/Linux uniformly
+            from ..compat import QtCore, QtGui
+            opened = QtGui.QDesktopServices.openUrl(
+                QtCore.QUrl.fromLocalFile(path))
+        except Exception:
+            opened = False
+        if not opened:
+            self._append_html(self._render_message(
+                "system",
+                translate("ChatDockWidget",
+                          "Could not open the log. Its path is: {}").format(path)))
+
+    def _copy_session_log(self):
+        """Copy the latest session log's contents to the clipboard."""
+        path = self._latest_log_path()
+        if not path:
+            self._append_html(self._render_message(
+                "system",
+                translate("ChatDockWidget",
+                          "No session log yet — click Save Log first.")))
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                content = f.read()
+            from ..compat import QtWidgets
+            QtWidgets.QApplication.clipboard().setText(content)
+            self._append_html(self._render_message(
+                "system",
+                translate("ChatDockWidget",
+                          "Session log copied to clipboard ({} characters) — {}"
+                          ).format(len(content), path)))
+        except Exception as e:
+            self._append_html(self._render_message(
+                "system",
+                translate("ChatDockWidget",
+                          "Could not copy the log: {}").format(e)))
 
     def _auto_save_log(self):
         """Auto-save tool trace after each tool-using response."""
