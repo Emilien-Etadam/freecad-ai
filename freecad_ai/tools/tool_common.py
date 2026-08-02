@@ -16,6 +16,7 @@ __all__ = [
     "ToolParam", "ToolDefinition", "ToolResult", "execute_code", "os",
     "_coerce_str_list", "_with_undo",
     "_body_shape_stats", "_subtractive_cut_note",
+    "_body_solid_stats", "_feature_error_state", "_pattern_effect_note",
     "_get_body_plane", "_get_body_axis",
     "_resolve_sketch_attachment", "_resolve_datum_plane_attachment",
     "_PLANE_TYPE_IDS", "_classify_support", "_owning_body_name",
@@ -130,6 +131,72 @@ def _subtractive_cut_note(operation, before_volume, after_volume,
                 "inside the solid.".format(removed))
 
     return "  (removed {:.1f} mm³)".format(removed)
+
+
+def _body_solid_stats(body):
+    """Return ``(volume, face_count)`` of a body's shape, or ``(None, None)``.
+
+    Used to tell whether a transformation feature (pattern, mirror) actually
+    changed the solid. None means "not measurable" — the caller skips the
+    check rather than guessing.
+    """
+    try:
+        shape = body.Shape
+        return shape.Volume, len(shape.Faces)
+    except Exception:
+        return None, None
+
+
+def _feature_error_state(feature) -> str:
+    """Return the feature's error/invalid state, or "" when it is fine."""
+    try:
+        state = list(getattr(feature, "State", []) or [])
+    except Exception:
+        return ""
+    for bad in ("Error", "Invalid", "Touched"):
+        if bad in state and bad != "Touched":
+            return bad
+    return ""
+
+
+def _pattern_effect_note(kind, before, after, occurrences=None,
+                         feature_state="") -> str:
+    """Report a pattern/mirror that left the solid unchanged.
+
+    ``before``/``after`` are ``(volume, face_count)`` pairs. A transformation
+    that adds occurrences must change the shape: more material for an
+    additive original, less for a subtractive one, and more faces either way.
+    An unchanged shape means the feature was created and valid-looking while
+    producing nothing — exactly what a wrong axis, a single occurrence, or
+    occurrences landing outside the material look like.
+
+    Pure, so it is testable without FreeCAD.
+    """
+    before_volume, before_faces = before
+    after_volume, after_faces = after
+
+    if feature_state:
+        return ("  [!] The {} feature is in an {} state — it did not build. "
+                "Check the axis/plane reference and the source feature."
+                .format(kind, feature_state))
+
+    if before_volume is None or after_volume is None:
+        return ""
+
+    volume_changed = abs(after_volume - before_volume) > 1e-6
+    faces_changed = (before_faces is not None and after_faces is not None
+                     and after_faces != before_faces)
+    if volume_changed or faces_changed:
+        if occurrences:
+            return "  ({} occurrences, {:+.0f} faces)".format(
+                occurrences, (after_faces or 0) - (before_faces or 0))
+        return "  ({:+.0f} faces)".format((after_faces or 0) - (before_faces or 0))
+
+    return ("  [!] The {} produced NO change — the solid is identical. The "
+            "occurrences either coincide with the original, fall outside the "
+            "material, or the axis/plane is wrong. Verify with list_edges or "
+            "describe_model before continuing; do NOT assume it worked."
+            .format(kind))
 
 
 def _get_body_plane(body, plane_name: str):

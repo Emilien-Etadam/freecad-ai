@@ -177,6 +177,20 @@ class ChatDockUIMixin:
         save_log_btn.clicked.connect(self._save_session_log)
         footer.addWidget(save_log_btn)
 
+        open_log_btn = QPushButton(translate("ChatDockWidget", "Open Log"))
+        open_log_btn.setMaximumWidth(80)
+        open_log_btn.setToolTip(translate(
+            "ChatDockWidget", "Open the latest session log in your default app"))
+        open_log_btn.clicked.connect(self._open_session_log)
+        footer.addWidget(open_log_btn)
+
+        copy_log_btn = QPushButton(translate("ChatDockWidget", "Copy Log"))
+        copy_log_btn.setMaximumWidth(80)
+        copy_log_btn.setToolTip(translate(
+            "ChatDockWidget", "Copy the latest session log to the clipboard"))
+        copy_log_btn.clicked.connect(self._copy_session_log)
+        footer.addWidget(copy_log_btn)
+
         # _capture_btn is intentionally excluded — its stylesheet is
         # composed in _capture_btn_stylesheet() so that mode color and
         # conflict-busting padding share a single setStyleSheet call.
@@ -185,6 +199,8 @@ class ChatDockUIMixin:
             new_chat_btn,
             load_chat_btn,
             save_log_btn,
+            open_log_btn,
+            copy_log_btn,
         ]
 
         footer.addStretch()
