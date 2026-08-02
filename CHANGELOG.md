@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Non-parametric solids are forbidden** (`freecad_ai/tools/handlers/document.py`, `freecad_ai/core/system_prompt.py`, `freecad_ai/config.py`). A `Part::Feature` stores only the final B-Rep — no feature tree, nothing editable afterwards — yet a modelling request rebuilt with raw `Part.makeBox`/`cut()` used to return a plain "success", the dead body only surfacing when the user opened the model tree. `execute_code` now compares the document before and after: any static solid the call introduced is refused, the call is rolled back via `doc.undo()`, and the error names the object and gives the parametric route to redo it. The Act-mode prompt and the tool description state the ban up front so the model doesn't try. Two exemptions: file imports (STEP/STL/mesh — there is no import tool, so `execute_code` is the only route) and an explicit `allow_static_solids` opt-in in `config.json` (JSON-only, defaults to `false`).
+
+- **`create_primitive` accepts a rotation** (`freecad_ai/tools/handlers/part_creation.py`). New optional `rot_x` / `rot_y` / `rot_z` parameters (degrees, applied as FreeCAD's yaw/pitch/roll). Cylinders and cones are Z-axis aligned, so a subtractive cylinder could previously only cut into a horizontal face — "cylindrical pockets on every face of a die" was impossible with the structured tools, and the model fell back to raw `Part.makeBox`/`cut()` in `execute_code`, producing a dead solid with no feature tree. Position-only calls keep their original placement path unchanged.
+
+### Changed
+
+- **Die pattern in the Act-mode prompt covers cylindrical pips** (`freecad_ai/core/system_prompt.py`). The pattern now spells out the rotation per face (`rot_x=±90` for front/back, `rot_y=±90` for left/right, none for top/bottom), keeps the rotation-free spherical option documented, and states explicitly that pips must stay subtractive features inside the same Body — never a rebuild via raw Part booleans.
+
 ### Fixed
 
 - **The Send path can no longer fail silently** (`freecad_ai/ui/chat_dock/send.py`, `freecad_ai/ui/chat_dock/display.py`). Any exception in `_send_message` now surfaces as a system bubble in the chat plus a full traceback in the Report View, instead of dying inside the Qt slot with no visible effect. Clicking Stop gives visible feedback ("Stopping the current request…"); a second Stop click force-detaches a worker stuck in a blocked network read — a vLLM/Ollama server that accepts the connection but never answers while loading a model would otherwise swallow every subsequent Send click in silence for up to the 300 s timeout. Verified end-to-end against a deliberately unresponsive local server (headless PySide6).

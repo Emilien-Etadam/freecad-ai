@@ -525,11 +525,76 @@ EXPORT_MODEL = ToolDefinition(
 
 # ── execute_code ────────────────────────────────────────────
 
+def _static_solid_names(doc) -> set:
+    """Names of non-parametric solids (``Part::Feature`` carrying a solid).
+
+    These are "dead" bodies: their Shape is stored geometry with no recipe
+    behind it, so nothing in them can be edited afterwards. Legitimate for
+    imports and mesh→solid conversion — the caller only reports the ones a
+    given ``execute_code`` call introduced.
+    """
+    if doc is None:
+        return set()
+    names = set()
+    for obj in getattr(doc, "Objects", []):
+        if getattr(obj, "TypeId", "") != "Part::Feature":
+            continue
+        try:
+            if obj.Shape.Solids:
+                names.add(obj.Name)
+        except Exception:
+            pass
+    return names
+
+
+# Import APIs that legitimately produce a static solid. There is no
+# import_model tool, so a STEP/STL/mesh import has to go through
+# execute_code — blocking those would leave no way to load a file at all.
+_IMPORT_API_MARKERS = (
+    "Import.insert", "Import.open", "Import.read",
+    "ImportGui.insert", "ImportGui.open",
+    "Mesh.insert", "Mesh.open", "MeshPart",
+    "importDXF", "importSVG", "importOBJ", "importCSG",
+    "Part.insert", "Part.open", "Part.read",
+    "App.openDocument", "FreeCAD.openDocument",
+)
+
+
+def _code_performs_import(code: str) -> bool:
+    """True when the executed code loads geometry from a file."""
+    return any(marker in code for marker in _IMPORT_API_MARKERS)
+
+
+def _dead_solid_error(new_static: set, has_parametric_body: bool) -> str:
+    """Refusal text when code created a static solid. Pure — testable headless.
+
+    Aimed at the model: state the rule, name the offending object, and give
+    the parametric route to redo the work.
+    """
+    names = ", ".join(sorted(new_static))
+    msg = ("Refused: this code created a NON-PARAMETRIC solid ({}) and was "
+           "rolled back. A Part::Feature stores only the final shape — no "
+           "feature tree, nothing editable afterwards — and static solids are "
+           "not allowed in this workbench.".format(names))
+    if has_parametric_body:
+        msg += (" Redo it by appending features to the existing PartDesign Body: "
+                "create_primitive(body_name=…, operation='subtractive'|'additive'), "
+                "pocket_sketch, pad_sketch, fillet_edges…")
+    else:
+        msg += (" Redo it with the PartDesign tools: create_body → create_sketch → "
+                "pad_sketch/pocket_sketch, or create_primitive — never "
+                "Part.makeBox/makeFillet/cut() bound to a Part::Feature.")
+    return msg
+
+
 def _handle_execute_code(code: str) -> ToolResult:
     """Execute arbitrary Python code (fallback tool)."""
+    from ...config import get_config
     from ...core.active_document import resolve_active_document
     from ...core.dangerous_mode import get_dangerous_mode
     from .. import freecad_tools
+
+    before_static = _static_solid_names(resolve_active_document())
 
     result = freecad_tools.execute_code(code, skip_safety=get_dangerous_mode().active)
     if result.success:
@@ -538,6 +603,29 @@ def _handle_execute_code(code: str) -> ToolResult:
         data = {"stdout": result.stdout}
         if doc:
             data["document"] = doc.Name
+        # Dead solids are forbidden: roll the call back and make the model
+        # redo the work parametrically. Two exemptions — a file import (no
+        # import tool exists, so execute_code is the only route) and an
+        # explicit allow_static_solids opt-in in config.json.
+        new_static = _static_solid_names(doc) - before_static
+        if new_static:
+            allowed = bool(getattr(get_config(), "allow_static_solids", False))
+            if allowed or _code_performs_import(code):
+                data["static_solids"] = sorted(new_static)
+            else:
+                has_body = any(getattr(o, "TypeId", "") == "PartDesign::Body"
+                               for o in getattr(doc, "Objects", []))
+                error = _dead_solid_error(new_static, has_body)
+                # execute_code commits its own "AI Code Execution" transaction,
+                # so undo() is what reverts it — leaving the document exactly
+                # as it was before the refused call.
+                try:
+                    doc.undo()
+                    doc.recompute()
+                except Exception:
+                    error += (" (Automatic rollback failed — remove {} manually.)"
+                              .format(", ".join(sorted(new_static))))
+                return ToolResult(success=False, output=result.stdout, error=error)
         return ToolResult(success=True, output=output, data=data)
     else:
         return ToolResult(success=False, output=result.stdout, error=result.stderr)
@@ -545,7 +633,7 @@ def _handle_execute_code(code: str) -> ToolResult:
 
 EXECUTE_CODE = ToolDefinition(
     name="execute_code",
-    description="Execute arbitrary Python code in FreeCAD's interpreter. LAST-RESORT fallback for operations no structured tool covers — check the tool list first. Do NOT use it to re-implement a covered operation (e.g. attaching a sketch to a face is `create_sketch`, not a hand-written AttachmentSupport macro). The code has access to FreeCAD, Part, PartDesign, Sketcher, Draft modules. Each call runs in a fresh namespace — variables, imports, and objects do NOT persist between calls, so make every call fully self-contained (re-fetch objects with getObject/getObjectsByLabel each time; a NameError means you referenced a name from an earlier call, not that your query was wrong).",
+    description="Execute arbitrary Python code in FreeCAD's interpreter. LAST-RESORT fallback for operations no structured tool covers — check the tool list first. Do NOT use it to re-implement a covered operation (e.g. attaching a sketch to a face is `create_sketch`, not a hand-written AttachmentSupport macro). The code has access to FreeCAD, Part, PartDesign, Sketcher, Draft modules. Each call runs in a fresh namespace — variables, imports, and objects do NOT persist between calls, so make every call fully self-contained (re-fetch objects with getObject/getObjectsByLabel each time; a NameError means you referenced a name from an earlier call, not that your query was wrong). NON-PARAMETRIC SOLIDS ARE REFUSED: code that leaves a raw Part::Feature solid behind (Part.makeBox/makeFillet/cut bound to addObject('Part::Feature')) is rolled back and returns an error — build solids with the PartDesign tools instead. File imports (STEP/STL/mesh) are exempt.",
     category="general",
     parameters=[
         ToolParam("code", "string", "Python code to execute"),

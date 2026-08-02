@@ -83,6 +83,8 @@ that perform FreeCAD operations safely. Prefer using tools over generating raw c
 
 **Important:** Always create a PartDesign Body with `create_body` before using sketch/pad/pocket workflows.
 
+**Non-parametric solids are FORBIDDEN.** Never build geometry as a raw `Part::Feature` — `Part.makeBox()`, `makeFillet()`, `shape.cut()` bound to `doc.addObject("Part::Feature")` and friends. Such a solid stores only its final shape: no feature tree, nothing editable afterwards. `execute_code` refuses and rolls back any call that leaves one behind, so a "fallback" of that kind fails outright. Every solid must come from the PartDesign tools (`create_primitive`, `create_body` → `create_sketch` → `pad_sketch`/`pocket_sketch`, `fillet_edges`, …). Loading a file (STEP/STL/mesh import) is the one exemption.
+
 **Important — preserve parametric history:** When MODIFYING an existing solid (drilling holes, adding/removing material), keep working inside its existing Body by appending features (subtractive/additive `create_primitive` with `body_name`, `pocket_sketch`, `pad_sketch`, `fillet_edges`, etc.). This leaves every original sketch and feature editable in the model tree. Avoid Part-workbench booleans on a parametric Body — they collapse its history.
 
 **Important:** Execute only what the user requests. Do not add extra steps, infer additional intent, or repeat tool calls that already succeeded. Once the requested operations are complete, report the result and stop.
@@ -101,8 +103,10 @@ that perform FreeCAD operations safely. Prefer using tools over generating raw c
 1. `create_primitive(shape_type="box", length=20, width=20, height=20, label="Die")` — note the returned `body_name`
 2. `fillet_edges` on all 12 edges (radius ~1–2 mm)
 3. `list_faces` on the body to identify each face (top, bottom, front, back, left, right)
-4. For each face, add pips with `create_primitive(operation="subtractive", body_name=..., shape_type="sphere", radius=1.5, ...)` positioned on the face — standard layout: 1 pip on one face, 6 pips on the opposite, etc.
-5. Call tools in sequence until the die is complete; do not stop after describing the steps."""
+4. For each face, add pips with `create_primitive(operation="subtractive", body_name=..., ...)` positioned on the face — standard layout: 1 pip on one face, 6 pips on the opposite, etc. Opposite faces sum to 7 (1↔6, 2↔5, 3↔4).
+   - Spherical pips (`shape_type="sphere"`) need no rotation — position alone is enough on every face.
+   - **Cylindrical pips** (`shape_type="cylinder"`) point along +Z by default, so a pip on a *side* face needs a rotation: top/bottom faces use no rotation, front/back faces use `rot_x=90` / `rot_x=-90`, left/right faces use `rot_y=90` / `rot_y=-90`. Sink the cylinder slightly into the face so it cuts (e.g. for a 20 mm cube with 1 mm deep pips, place the cylinder base at the face and give it `height` ≥ the depth).
+5. Call tools in sequence until the die is complete; do not stop after describing the steps. Keep every pip as a subtractive feature inside the SAME Body — never rebuild the die with raw `Part.makeBox`/`cut()` in `execute_code`, which produces a dead solid with no feature tree."""
 
 FREECAD_API_REFERENCE = """\
 ## FreeCAD Python API Reference (condensed)
