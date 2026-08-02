@@ -8,6 +8,51 @@ from ..tool_common import *  # noqa: F403
 
 # ── create_primitive ────────────────────────────────────────
 
+def _body_shape_stats(body):
+    """Return ``(volume, shell_count)`` of a body's shape, or ``(None, None)``.
+
+    None means "not measurable" (no Tip yet, shape not computed) — the caller
+    then simply skips the cut check rather than guessing.
+    """
+    try:
+        shape = body.Shape
+        return shape.Volume, len(shape.Shells)
+    except Exception:
+        return None, None
+
+
+def _subtractive_cut_note(operation, before_volume, after_volume,
+                          before_shells, after_shells) -> str:
+    """Report a subtractive feature that cut nothing or buried a void.
+
+    Pure, so it is testable without FreeCAD. A pocket placed entirely outside
+    the solid removes no material; one placed entirely inside it hollows out
+    an invisible cavity (visible as an extra shell). Both look like success —
+    the feature is created and valid — while the model is silently wrong.
+    """
+    if operation != "subtractive":
+        return ""
+    if before_volume is None or after_volume is None:
+        return ""
+
+    removed = before_volume - after_volume
+    if removed <= 1e-6:
+        return ("  [!] This removed NO material — the shape lies entirely "
+                "outside the body. A primitive starts at its placement point "
+                "and extends along its local +Z (rotated by rot_x/rot_y/rot_z), "
+                "so it must cross the surface: start it ON or slightly outside "
+                "the face and give it enough height to reach inside.")
+
+    if (before_shells is not None and after_shells is not None
+            and after_shells > before_shells):
+        return ("  [!] This cut an INTERNAL VOID ({:.1f} mm³ hollowed out "
+                "below the surface, not visible from outside). Move the "
+                "primitive so it crosses the face instead of sitting entirely "
+                "inside the solid.".format(removed))
+
+    return "  (removed {:.1f} mm³)".format(removed)
+
+
 def _handle_create_primitive(
     shape_type: str,
     label: str = "",
@@ -73,6 +118,11 @@ def _handle_create_primitive(
             body = doc.addObject("PartDesign::Body", body_label)
             body.Label = body_label
 
+        # Snapshot the body before the feature so a subtractive cut that
+        # removes nothing (shape entirely outside the solid) or that buries a
+        # void inside it can be reported — both are silent modelling errors.
+        before_volume, before_shells = _body_shape_stats(body)
+
         name = label or st.capitalize()
         obj = body.newObject(pd_type, name)
         obj.Label = name
@@ -108,10 +158,20 @@ def _handle_create_primitive(
         if rot_x or rot_y or rot_z:
             placement_note = (f" at ({x}, {y}, {z}) rotated "
                               f"({rot_x}, {rot_y}, {rot_z})°")
+
+        # Recompute now so the cut can be measured inside this transaction.
+        try:
+            doc.recompute()
+        except Exception:
+            pass
+        after_volume, after_shells = _body_shape_stats(body)
+        cut_note = _subtractive_cut_note(
+            op, before_volume, after_volume, before_shells, after_shells)
+
         return ToolResult(
             success=True,
             output=(f"Created {op} {st} '{obj.Label}' ({obj.Name}) in body "
-                    f"'{body.Label}' ({body.Name}){placement_note}"),
+                    f"'{body.Label}' ({body.Name}){placement_note}{cut_note}"),
             data={"name": obj.Name, "label": obj.Label, "type": pd_type,
                   "body_name": body.Name, "body_label": body.Label},
         )
@@ -135,9 +195,17 @@ CREATE_PRIMITIVE = ToolDefinition(
         ToolParam("height", "number", "Height (box/cylinder/cone)", required=False, default=10.0),
         ToolParam("radius", "number", "Radius (cylinder/sphere/cone r1/torus major)", required=False, default=5.0),
         ToolParam("radius2", "number", "Second radius (cone r2/torus minor)", required=False, default=2.0),
-        ToolParam("x", "number", "X position", required=False, default=0.0),
-        ToolParam("y", "number", "Y position", required=False, default=0.0),
-        ToolParam("z", "number", "Z position", required=False, default=0.0),
+        ToolParam("x", "number",
+                  "X of the placement point. NOTE: a box/cylinder/cone starts AT "
+                  "this point and grows along its local +Z — it is a corner/base, "
+                  "not a centre. A subtractive shape must CROSS the target face to "
+                  "cut it: sitting entirely outside removes nothing, sitting "
+                  "entirely inside hollows an invisible void",
+                  required=False, default=0.0),
+        ToolParam("y", "number", "Y of the placement point (see x)",
+                  required=False, default=0.0),
+        ToolParam("z", "number", "Z of the placement point (see x)",
+                  required=False, default=0.0),
         ToolParam("rot_x", "number",
                   "Rotation about X in degrees. Cylinders/cones point along +Z by "
                   "default — use rot_x=90 to aim one along -Y (e.g. a cylindrical "

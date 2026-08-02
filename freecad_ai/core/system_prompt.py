@@ -105,7 +105,14 @@ that perform FreeCAD operations safely. Prefer using tools over generating raw c
 3. `list_faces` on the body to identify each face (top, bottom, front, back, left, right)
 4. For each face, add pips with `create_primitive(operation="subtractive", body_name=..., ...)` positioned on the face — standard layout: 1 pip on one face, 6 pips on the opposite, etc. Opposite faces sum to 7 (1↔6, 2↔5, 3↔4).
    - Spherical pips (`shape_type="sphere"`) need no rotation — position alone is enough on every face.
-   - **Cylindrical pips** (`shape_type="cylinder"`) point along +Z by default, so a pip on a *side* face needs a rotation: top/bottom faces use no rotation, front/back faces use `rot_x=90` / `rot_x=-90`, left/right faces use `rot_y=90` / `rot_y=-90`. Sink the cylinder slightly into the face so it cuts (e.g. for a 20 mm cube with 1 mm deep pips, place the cylinder base at the face and give it `height` ≥ the depth).
+   - **Cylindrical pips** (`shape_type="cylinder"`): a cylinder starts AT its placement point and grows along its local +Z (rotated by `rot_*`). It must CROSS the face — a pocket entirely outside the solid cuts nothing, one entirely inside hollows an invisible void. For a cube spanning 0…20 on each axis with 1 mm deep pips, start each cylinder 1 mm OUTSIDE the face and give it `height=2` so it spans outside→inside and leaves a 1 mm dimple:
+     - top (z=20): `z=19`, `height=2`, no rotation — grows +Z from inside to outside
+     - bottom (z=0): `z=1`, `height=2`, `rot_x=180` — grows −Z, crossing z=0
+     - front (y=0): `y=1`, `height=2`, `rot_x=90` — grows −Y, crossing y=0
+     - back (y=20): `y=19`, `height=2`, `rot_x=-90` — grows +Y, crossing y=20
+     - left (x=0): `x=1`, `height=2`, `rot_y=-90` — grows −X, crossing x=0
+     - right (x=20): `x=19`, `height=2`, `rot_y=90` — grows +X, crossing x=20
+   - Each `create_primitive` call reports how much material it removed. If it says NO material was removed or that it cut an INTERNAL VOID, the placement is wrong — fix that pip before continuing.
 5. Call tools in sequence until the die is complete; do not stop after describing the steps. Keep every pip as a subtractive feature inside the SAME Body — never rebuild the die with raw `Part.makeBox`/`cut()` in `execute_code`, which produces a dead solid with no feature tree."""
 
 FREECAD_API_REFERENCE = """\
