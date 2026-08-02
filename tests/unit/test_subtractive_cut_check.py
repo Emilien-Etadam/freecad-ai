@@ -50,6 +50,14 @@ class TestCutNote:
         # the note must explain the placement convention that caused it
         assert "+Z" in note
 
+    def test_geometric_context_is_included(self):
+        """Without the coordinates the caller hunts the wrong axis: a hole at
+        x=62.5 on a body spanning X[-50, 50] is beside the part, not shallow."""
+        ctx = (" The cut starts at (62.5, 0.0, 10.0) while the body spans "
+               "X[-50.0, 50.0] Y[-50.0, 50.0] Z[0.0, 32.0] — compare them.")
+        note = _subtractive_cut_note("subtractive", 100.0, 100.0, 1, 1, context=ctx)
+        assert "62.5" in note and "X[-50.0, 50.0]" in note
+
     def test_internal_void_is_flagged(self):
         note = _subtractive_cut_note("subtractive", 100.0, 93.0, 1, 2)
         assert "INTERNAL VOID" in note
@@ -119,3 +127,46 @@ class TestWiring:
         assert "_body_shape_stats" in tool_common.__all__
         for mod in (part_creation, sketch):
             assert hasattr(mod, "_subtractive_cut_note"), mod.__name__
+
+
+class TestPlacementContext:
+    """The 'where is it vs where is the body' one-liner."""
+
+    class _Obj:
+        class Placement:
+            class Base:
+                x, y, z = 62.5, 0.0, 10.0
+
+    class _Body:
+        class Shape:
+            class BoundBox:
+                XMin, XMax = -50.0, 50.0
+                YMin, YMax = -50.0, 50.0
+                ZMin, ZMax = 0.0, 32.0
+
+    def test_reports_both_positions(self):
+        from freecad_ai.tools.tool_common import _placement_vs_body
+
+        text = _placement_vs_body(self._Obj(), self._Body())
+        assert "62.5" in text
+        assert "X[-50.0, 50.0]" in text
+        assert "Z[0.0, 32.0]" in text
+
+    def test_silent_when_unavailable(self):
+        from freecad_ai.tools.tool_common import _placement_vs_body
+
+        assert _placement_vs_body(object(), object()) == ""
+
+    def test_wired_into_create_primitive(self):
+        import inspect
+        from freecad_ai.tools.handlers import part_creation
+
+        src = inspect.getsource(part_creation._handle_create_primitive)
+        assert "context=_placement_vs_body(obj, body)" in src
+
+    def test_wired_into_all_patterns(self):
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parents[2] / "freecad_ai" / "tools"
+               / "handlers" / "modifiers.py").read_text()
+        assert src.count("context=_placement_vs_body(feature, body)") == 3

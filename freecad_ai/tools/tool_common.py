@@ -17,6 +17,7 @@ __all__ = [
     "_coerce_str_list", "_with_undo",
     "_body_shape_stats", "_subtractive_cut_note",
     "_body_solid_stats", "_feature_error_state", "_pattern_effect_note",
+    "_placement_vs_body",
     "_get_body_plane", "_get_body_axis",
     "_resolve_sketch_attachment", "_resolve_datum_plane_attachment",
     "_PLANE_TYPE_IDS", "_classify_support", "_owning_body_name",
@@ -100,8 +101,28 @@ def _body_shape_stats(body):
         return None, None
 
 
+def _placement_vs_body(obj, body) -> str:
+    """Where the cutting shape sits versus where the body actually is.
+
+    A cut that removes nothing is almost always mis-placed, and the numbers
+    say which way: a hole at x=62.5 on a body spanning X[-50, 50] is beside
+    the part, not too shallow. Without this the caller only learns *that*
+    nothing was cut and tends to hunt the wrong axis.
+    """
+    try:
+        p = obj.Placement.Base
+        bb = body.Shape.BoundBox
+    except Exception:
+        return ""
+    return (" The cut starts at ({:.1f}, {:.1f}, {:.1f}) while the body spans "
+            "X[{:.1f}, {:.1f}] Y[{:.1f}, {:.1f}] Z[{:.1f}, {:.1f}] — compare "
+            "them to see which coordinate is off.".format(
+                p.x, p.y, p.z,
+                bb.XMin, bb.XMax, bb.YMin, bb.YMax, bb.ZMin, bb.ZMax))
+
+
 def _subtractive_cut_note(operation, before_volume, after_volume,
-                          before_shells, after_shells) -> str:
+                          before_shells, after_shells, context: str = "") -> str:
     """Report a subtractive feature that cut nothing or buried a void.
 
     Pure, so it is testable without FreeCAD. A pocket placed entirely outside
@@ -117,11 +138,10 @@ def _subtractive_cut_note(operation, before_volume, after_volume,
     removed = before_volume - after_volume
     if removed <= 1e-6:
         return ("  [!] This removed NO material — the cutting shape never "
-                "reaches the solid. A primitive starts at its placement point "
+                "reaches the solid.{} A primitive starts at its placement point "
                 "and extends along its local +Z (rotated by rot_x/rot_y/rot_z), "
                 "and a pocket runs from its sketch plane; either way the cut "
-                "must CROSS the target face, so start it on or slightly outside "
-                "the face and give it enough depth to reach inside.")
+                "must CROSS the target face.".format(context))
 
     if (before_shells is not None and after_shells is not None
             and after_shells > before_shells):
@@ -160,7 +180,7 @@ def _feature_error_state(feature) -> str:
 
 
 def _pattern_effect_note(kind, before, after, occurrences=None,
-                         feature_state="") -> str:
+                         feature_state="", context: str = "") -> str:
     """Report a pattern/mirror that left the solid unchanged.
 
     ``before``/``after`` are ``(volume, face_count)`` pairs. A transformation
@@ -192,11 +212,11 @@ def _pattern_effect_note(kind, before, after, occurrences=None,
                 occurrences, (after_faces or 0) - (before_faces or 0))
         return "  ({:+.0f} faces)".format((after_faces or 0) - (before_faces or 0))
 
-    return ("  [!] The {} produced NO change — the solid is identical. The "
+    return ("  [!] The {} produced NO change — the solid is identical.{} The "
             "occurrences either coincide with the original, fall outside the "
             "material, or the axis/plane is wrong. Verify with list_edges or "
             "describe_model before continuing; do NOT assume it worked."
-            .format(kind))
+            .format(kind, context))
 
 
 def _get_body_plane(body, plane_name: str):
