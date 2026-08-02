@@ -1268,6 +1268,7 @@ def _handle_pocket_sketch(
         # (e.g. offset=3 vs offset=H) and through_all pockets where the
         # default direction may only graze a thin slab.
         vol_before = body.Shape.Volume if body.Shape else 0
+        _, shells_before = _body_shape_stats(body)
 
         # Try default direction (Reversed=False)
         pocket.Reversed = False
@@ -1291,9 +1292,17 @@ def _handle_pocket_sketch(
 
         sketch.Visibility = False
 
+        # Same silent-failure check as create_primitive: a pocket that reaches
+        # no material, or that hollows a void under the surface, is created
+        # and valid — nothing else would tell the caller it did nothing.
+        after_volume, after_shells = _body_shape_stats(body)
+        cut_note = _subtractive_cut_note(
+            "subtractive", vol_before, after_volume, shells_before, after_shells)
+
         return ToolResult(
             success=True,
-            output=f"Created pocket from sketch '{sketch.Name}' (pocket name: '{pocket.Name}')",
+            output=(f"Created pocket from sketch '{sketch.Name}' "
+                    f"(pocket name: '{pocket.Name}'){cut_note}"),
             data={"name": pocket.Name, "label": pocket.Label},
         )
 
