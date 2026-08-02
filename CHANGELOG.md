@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Code calling tool names as Python functions is rejected with the reason** (`freecad_ai/core/executor.py`). In Act mode a model may answer a modelling request with a ```python block calling `create_body(label="Die")` / `create_primitive(…)` — those are tools, not functions in FreeCAD's interpreter, so the code cannot run. It used to fail several steps later on an unrelated error (on a fresh session, "No active document"), and the retry loop burned its attempts on the wrong problem. The executor now names the mistake before running anything: which tool names were called, and that real tool calls are what's needed. Method calls (`doc.undo()`) are not flagged.
+- **`execute_code` creates a document when none is open** (`freecad_ai/core/executor.py`). The structured creation tools have done this since the last release; `execute_code` still refused, so a fresh FreeCAD session blocked on a rule the rest of the toolset no longer applied. The explicit refusal remains as the last resort if document creation itself fails.
+
 ### Added
 
 - **Subtractive features report what they actually cut** (`freecad_ai/tools/handlers/part_creation.py`). A pocket placed entirely outside the solid removes nothing, and one placed entirely inside it hollows an invisible internal cavity — both returned a plain "Created subtractive cylinder…" success. `create_primitive` now measures the body's volume and shell count around the feature and appends the verdict: `removed 7.1 mm³`, or a flagged warning naming the failure mode and the placement convention behind it (a primitive starts AT its placement point and grows along its local +Z, so a cut must cross the target face). Applies to `create_primitive` and `pocket_sketch` alike (the shared helpers live in `tools/tool_common.py`); `pocket_sketch` already measured the volumes to pick its cut direction but never reported the outcome. Observed on a real die: of 21 pips, one dimpled a face, eleven cut nothing and nine buried voids — every call had reported success.
