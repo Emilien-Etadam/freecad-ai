@@ -121,7 +121,8 @@ def _handle_create_primitive(
             pass
         after_volume, after_shells = _body_shape_stats(body)
         cut_note = _subtractive_cut_note(
-            op, before_volume, after_volume, before_shells, after_shells)
+            op, before_volume, after_volume, before_shells, after_shells,
+            context=_placement_vs_body(obj, body))
 
         return ToolResult(
             success=True,

@@ -659,7 +659,8 @@ def _handle_linear_pattern(
             pass
         note = _pattern_effect_note(
             "linear pattern", before, _body_solid_stats(body),
-            occurrences=occurrences, feature_state=_feature_error_state(pattern))
+            occurrences=occurrences, feature_state=_feature_error_state(pattern),
+            context=_placement_vs_body(feature, body))
 
         return ToolResult(
             success=True,
@@ -744,7 +745,8 @@ def _handle_polar_pattern(
             pass
         note = _pattern_effect_note(
             "polar pattern", before, _body_solid_stats(body),
-            occurrences=occurrences, feature_state=_feature_error_state(pattern))
+            occurrences=occurrences, feature_state=_feature_error_state(pattern),
+            context=_placement_vs_body(feature, body))
 
         return ToolResult(
             success=True,
@@ -918,7 +920,8 @@ def _handle_mirror_feature(
             pass
         note = _pattern_effect_note(
             "mirror", before, _body_solid_stats(body),
-            feature_state=_feature_error_state(mirror))
+            feature_state=_feature_error_state(mirror),
+            context=_placement_vs_body(feature, body))
 
         return ToolResult(
             success=True,
