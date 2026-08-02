@@ -625,6 +625,8 @@ def _handle_linear_pattern(
                 error=f"Feature '{feature_name}' is not inside a PartDesign body. Linear pattern requires a body."
             )
 
+        before = _body_solid_stats(body)
+
         name = label or "LinearPattern"
         pattern = body.newObject("PartDesign::LinearPattern", name)
         pattern.Originals = [feature]
@@ -651,9 +653,17 @@ def _handle_linear_pattern(
         pattern.Length = length
         pattern.Occurrences = occurrences
 
+        try:
+            doc.recompute()
+        except Exception:
+            pass
+        note = _pattern_effect_note(
+            "linear pattern", before, _body_solid_stats(body),
+            occurrences=occurrences, feature_state=_feature_error_state(pattern))
+
         return ToolResult(
             success=True,
-            output=f"Created linear pattern of '{feature_name}' ({occurrences} occurrences, {length}mm span, direction={direction})",
+            output=f"Created linear pattern of '{feature_name}' ({occurrences} occurrences, {length}mm span, direction={direction}){note}",
             data={"name": pattern.Name, "label": pattern.Label, "occurrences": occurrences},
         )
 
@@ -698,6 +708,8 @@ def _handle_polar_pattern(
                 error=f"Feature '{feature_name}' is not inside a PartDesign body. Polar pattern requires a body."
             )
 
+        before = _body_solid_stats(body)
+
         name = label or "PolarPattern"
         pattern = body.newObject("PartDesign::PolarPattern", name)
         pattern.Originals = [feature]
@@ -723,9 +735,20 @@ def _handle_polar_pattern(
         pattern.Angle = angle
         pattern.Occurrences = occurrences
 
+        # Recompute inside the transaction so the pattern's real effect can be
+        # measured: a pattern that adds no occurrence looks identical to one
+        # that works.
+        try:
+            doc.recompute()
+        except Exception:
+            pass
+        note = _pattern_effect_note(
+            "polar pattern", before, _body_solid_stats(body),
+            occurrences=occurrences, feature_state=_feature_error_state(pattern))
+
         return ToolResult(
             success=True,
-            output=f"Created polar pattern of '{feature_name}' ({occurrences} occurrences, {angle}° span, axis={axis})",
+            output=f"Created polar pattern of '{feature_name}' ({occurrences} occurrences, {angle}° span, axis={axis}){note}",
             data={"name": pattern.Name, "label": pattern.Label, "occurrences": occurrences},
         )
 
@@ -866,6 +889,7 @@ def _handle_mirror_feature(
             )
 
         name = label or "Mirrored"
+        before = _body_solid_stats(body)
         mirror = body.newObject("PartDesign::Mirrored", name)
         mirror.Originals = [feature]
 
@@ -888,9 +912,17 @@ def _handle_mirror_feature(
             else:
                 return ToolResult(success=False, output="", error=f"Invalid plane: {plane}. Use XY/XZ/YZ or Sketch.N_Axis")
 
+        try:
+            doc.recompute()
+        except Exception:
+            pass
+        note = _pattern_effect_note(
+            "mirror", before, _body_solid_stats(body),
+            feature_state=_feature_error_state(mirror))
+
         return ToolResult(
             success=True,
-            output=f"Mirrored '{feature_name}' across {plane}",
+            output=f"Mirrored '{feature_name}' across {plane}{note}",
             data={"name": mirror.Name, "label": mirror.Label, "plane": plane},
         )
 
