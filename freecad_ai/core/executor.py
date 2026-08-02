@@ -146,6 +146,41 @@ def _collect_object_issues(objects_state, baseline_bad):
     return issues
 
 
+def _tool_names_called_as_functions(code: str) -> str:
+    """Error text when the code calls tool names as if they were Python.
+
+    Models sometimes answer a modelling request with a ```python block that
+    calls the *tools* — ``create_body(label="Die")``, ``create_primitive(…)``
+    — which do not exist in FreeCAD's interpreter. Executing that raises a
+    bare ``NameError`` several steps later (or, on an empty document, an
+    unrelated error first), and the retry loop burns its attempts on the
+    wrong problem. Naming the mistake up front is what lets the model fix it.
+
+    Returns "" when the code is fine. Method calls (``doc.undo()``) are not
+    flagged — only bare calls.
+    """
+    import re
+
+    try:  # lazy: freecad_ai.tools imports this module
+        from ..tools.freecad_tools import ALL_TOOLS
+        tool_names = {t.name for t in ALL_TOOLS}
+    except Exception:
+        return ""
+
+    called = set(re.findall(r"(?<![.\w])([a-z_][a-z0-9_]*)\s*\(", code))
+    hits = sorted(called & tool_names)
+    if not hits:
+        return ""
+    return (
+        "This code calls {} as if they were Python functions, but they are "
+        "TOOLS — they do not exist in FreeCAD's interpreter and this code "
+        "cannot run. Do not write a ```python block for work the tools cover: "
+        "issue real tool calls instead (one call per operation). Use "
+        "execute_code only for genuine FreeCAD Python (App/Part/Sketcher…) "
+        "that no tool provides.".format(", ".join(hits))
+    )
+
+
 def _sandbox_test(code: str, timeout: int = 15, document_path: str | None = None) -> tuple:
     """Test code in a headless FreeCAD subprocess.
 
@@ -482,7 +517,20 @@ def execute_code(code: str, timeout: int | None = None, sandbox: bool = True,
                 except OSError:
                     pass
 
+    confusion = _tool_names_called_as_functions(code)
+    if confusion:
+        return ExecutionResult(success=False, stdout="", stderr=confusion, code=code)
+
     target_doc = get_synced_active_document()
+    if target_doc is None:
+        # Match the structured tools, which create a document rather than
+        # refusing: "make me a die" on a fresh FreeCAD must just work.
+        try:
+            import FreeCAD as App
+            target_doc = App.newDocument()
+            refresh_gui_for_document(target_doc)
+        except Exception:
+            target_doc = None
     if target_doc is None:
         return ExecutionResult(
             success=False,
