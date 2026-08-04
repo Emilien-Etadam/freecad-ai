@@ -35,7 +35,7 @@ QTextCursor = QtGui.QTextCursor
 from ..config import LOGS_DIR, get_config, prune_oldest_files, save_current_config
 from ..core.conversation import Conversation
 from ..core.executor import extract_code_blocks, extract_truncated_block, execute_code
-from ..core.loop_control import should_continue_loop
+from ..core.loop_control import resolve_turn_outcome, should_continue_loop
 from ..core.input_history import InputHistory
 from .message_view import (
     _get_theme_colors,
@@ -329,12 +329,20 @@ class _LLMWorker(QThread):
             turn_text = "".join(text_parts)
             turn_thinking = "".join(thinking_parts)
 
-            if self.isInterruptionRequested():
+            outcome = resolve_turn_outcome(
+                client.response_truncated, tool_calls, self.isInterruptionRequested())
+            if outcome == "stopped":
                 self._full_response += "\n\n_⏹ Stopped by user._"
                 self.response_finished.emit(self._full_response)
                 return
-            if not tool_calls:
-                # No tool calls — we're done
+            if outcome == "truncated":
+                # Cut off at the output limit. Any tool calls in this turn came
+                # from a half-formed payload, so the loop halts here instead of
+                # acting on them; the UI shows the truncation warning (#52).
+                self._response_truncated = True
+                self.response_finished.emit(self._full_response)
+                return
+            if outcome == "done":
                 self.response_finished.emit(self._full_response)
                 return
 
