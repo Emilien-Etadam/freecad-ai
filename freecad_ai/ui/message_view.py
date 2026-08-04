@@ -4,6 +4,7 @@ Converts chat messages (with markdown-ish formatting and code blocks)
 into HTML suitable for display in a QTextBrowser.
 """
 
+import base64
 import html
 import re
 
@@ -11,6 +12,9 @@ from ..i18n import translate
 
 # Match ```python ... ``` code blocks
 CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+
+# Match a trailing fence that was opened but never closed (truncated response)
+UNCLOSED_BLOCK_RE = re.compile(r"```(\w*)[ \t]*\n((?:(?!```).)*)\Z", re.DOTALL)
 
 # Match <think>...</think> blocks
 THINK_BLOCK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
@@ -284,6 +288,52 @@ def render_code_block(code: str, language: str = "python") -> str:
     )
 
 
+def render_plan_buttons(code: str, allow_execute: bool = True) -> str:
+    """Render the Plan-mode Execute/Copy buttons for a code block.
+
+    ``allow_execute=False`` withholds Execute for a truncated block: a script cut
+    off mid-expression would raise a SyntaxError or leave half-built geometry, so
+    the user gets Copy only (issue #50).
+    """
+    encoded = base64.b64encode(code.encode()).decode()
+    buttons = []
+    if allow_execute:
+        buttons.append(
+            f'<a href="execute:{encoded}" style="text-decoration: none; '
+            f'background-color: #2e7d32; color: white; padding: 3px 12px; '
+            f'border-radius: 3px; font-size: 12px; margin-right: 6px;">'
+            f'{translate("ChatDockWidget", "Execute")}</a> '
+        )
+    buttons.append(
+        f'<a href="copy:{encoded}" style="text-decoration: none; '
+        f'background-color: #666; color: white; padding: 3px 12px; '
+        f'border-radius: 3px; font-size: 12px;">'
+        f'{translate("ChatDockWidget", "Copy")}</a>'
+    )
+    return '<div style="margin: 2px 0 8px 0;">{}</div>'.format("".join(buttons))
+
+
+def render_truncation_warning(max_tokens: int) -> str:
+    """Warn that the response was cut off at the output-token limit.
+
+    Without this the truncation is silent: the plan simply stops mid-line and the
+    user has no way to tell why it looks unfinished (issue #50).
+    """
+    colors = _get_theme_colors()
+    msg = translate(
+        "MessageView",
+        "Response was cut off at the output limit ({max_tokens} tokens). "
+        "Raise Max Tokens in Settings, or ask the model to continue."
+    ).replace("{max_tokens}", str(max_tokens))
+    return (
+        f'<div style="margin: 6px 0; padding: 6px 10px; '
+        f'border-left: 3px solid {colors["tool_error_border"]}; '
+        f'background-color: {colors["system_bg"]}; border-radius: 0 4px 4px 0; '
+        f'color: {colors["stdout_text"]}; font-size: 12px;">'
+        f'&#9888; {html.escape(msg)}</div>'
+    )
+
+
 def render_execution_result(success: bool, stdout: str, stderr: str) -> str:
     """Render code execution results."""
     colors = _get_theme_colors()
@@ -524,10 +574,19 @@ def _format_content(text: str) -> str:
 
         last_end = match.end()
 
-    # Process remaining text after last block
+    # Process remaining text after last block. A trailing fence that was never
+    # closed means the response was cut off mid-block (issue #50) — still render
+    # it as code rather than dumping a wall of unformatted source on the user.
     remaining = text[last_end:]
     if remaining:
-        parts.append(_format_inline(html.escape(remaining)))
+        truncated = UNCLOSED_BLOCK_RE.search(remaining)
+        if truncated:
+            before = remaining[:truncated.start()]
+            if before:
+                parts.append(_format_inline(html.escape(before)))
+            parts.append(render_code_block(truncated.group(2), truncated.group(1) or "python"))
+        else:
+            parts.append(_format_inline(html.escape(remaining)))
 
     return "".join(parts)
 

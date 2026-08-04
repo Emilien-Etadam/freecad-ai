@@ -148,6 +148,10 @@ class LLMClient:
         self.model_params = model_params or {}  # freeform per-model params
         self.api_style = get_api_style(provider_name)
 
+        # Set when the last stream ended because it hit the output-token limit
+        # rather than finishing. Read by the UI to warn the user (issue #50).
+        self.response_truncated = False
+
         # SSL context for HTTPS requests.
         # Snap-packaged FreeCAD may lack the _ssl C extension, in which
         # case we fall back to no certificate verification.  The connection
@@ -223,6 +227,7 @@ class LLMClient:
 
     def stream(self, messages: list[dict], system: str = "") -> Generator[str, None, None]:
         """Send a streaming request. Yields text deltas as they arrive."""
+        self.response_truncated = False  # never carry a stale warning into a new turn
         if self.api_style == "anthropic":
             yield from self._stream_anthropic(messages, system)
         else:
@@ -475,6 +480,8 @@ class LLMClient:
                     content = delta.get("content")
                     if content:
                         yield content
+                    if choices[0].get("finish_reason") == "length":
+                        self.response_truncated = True
                     # Skip reasoning_content in simple stream mode
             except (KeyError, IndexError):
                 continue
@@ -664,6 +671,9 @@ class LLMClient:
                 text = delta.get("text")
                 if text:
                     yield text
+            elif event_type == "message_delta":
+                if chunk.get("delta", {}).get("stop_reason") == "max_tokens":
+                    self.response_truncated = True
 
     def _stream_anthropic_tools(self, messages: list[dict], system: str,
                                 tools: list[dict] | None) -> Generator[LLMStreamEvent, None, None]:

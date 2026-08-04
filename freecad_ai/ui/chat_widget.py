@@ -34,7 +34,7 @@ QTextCursor = QtGui.QTextCursor
 
 from ..config import LOGS_DIR, get_config, prune_oldest_files, save_current_config
 from ..core.conversation import Conversation
-from ..core.executor import extract_code_blocks, execute_code
+from ..core.executor import extract_code_blocks, extract_truncated_block, execute_code
 from ..core.loop_control import should_continue_loop
 from ..core.input_history import InputHistory
 from .message_view import (
@@ -45,7 +45,9 @@ from .message_view import (
     render_message,
     render_code_block,
     render_execution_result,
+    render_plan_buttons,
     render_tool_call,
+    render_truncation_warning,
 )
 from .code_review_dialog import CodeReviewDialog
 
@@ -240,6 +242,7 @@ class _LLMWorker(QThread):
         self._max_tool_turns = get_config().max_tool_turns  # 0 = endless
         self._strip_thinking = False  # resolved in run()
         self._tool_timeline = []  # timing data for summary visualization
+        self._response_truncated = False  # response hit the output-token limit
 
     def run(self):
         try:
@@ -287,6 +290,7 @@ class _LLMWorker(QThread):
                 break
             self._full_response += chunk
             self.token_received.emit(chunk)
+        self._response_truncated = client.response_truncated
         self.response_finished.emit(self._full_response)
 
     def _tool_loop(self, client):
@@ -2249,6 +2253,11 @@ class ChatDockWidget(QDockWidget):
         # Re-render the full chat to get proper code block formatting
         self._rerender_chat()
 
+        # Warn when the model ran out of output budget mid-answer. Without this
+        # the plan just stops mid-line with no explanation (issue #50).
+        if self._worker and self._worker._response_truncated:
+            self._append_html(render_truncation_warning(get_config().max_tokens))
+
         # Tool call summary (after re-render so it's not wiped)
         if self._worker and self._worker._tool_timeline and not getattr(self, '_summary_rendered', False):
             self._summary_rendered = True
@@ -2650,9 +2659,14 @@ class ChatDockWidget(QDockWidget):
 
                 if mode == "plan" and msg["role"] == "assistant":
                     content = Conversation.extract_text(msg.get("content", ""))
-                    code_blocks = extract_code_blocks(content)
-                    for code in code_blocks:
-                        html_parts.append(self._make_plan_buttons_html(code))
+                    for code in extract_code_blocks(content):
+                        html_parts.append(render_plan_buttons(code))
+                    # A block cut off at max_tokens gets Copy but not Execute —
+                    # running a half-written script would fail or leave partial
+                    # geometry behind (issue #50).
+                    partial = extract_truncated_block(content)
+                    if partial:
+                        html_parts.append(render_plan_buttons(partial, allow_execute=False))
 
             full_html = "".join(html_parts)
             self.chat_display.setHtml(full_html)
@@ -2661,26 +2675,6 @@ class ChatDockWidget(QDockWidget):
             scrollbar.setValue(scrollbar.maximum())
         except Exception:
             pass  # Keep existing display content on error
-
-    def _make_plan_buttons_html(self, code):
-        """Create HTML for Plan mode Execute/Copy buttons."""
-        import base64
-        encoded = base64.b64encode(code.encode()).decode()
-        return (
-            '<div style="margin: 2px 0 8px 0;">'
-            '<a href="execute:{encoded}" style="text-decoration: none; '
-            'background-color: #2e7d32; color: white; padding: 3px 12px; '
-            'border-radius: 3px; font-size: 12px; margin-right: 6px;">'
-            '{execute}</a> '
-            '<a href="copy:{encoded}" style="text-decoration: none; '
-            'background-color: #666; color: white; padding: 3px 12px; '
-            'border-radius: 3px; font-size: 12px;">{copy}</a>'
-            '</div>'.format(
-                encoded=encoded,
-                execute=translate("ChatDockWidget", "Execute"),
-                copy=translate("ChatDockWidget", "Copy"),
-            )
-        )
 
     def _handle_anchor_click(self, url):
         """Handle clicks on anchor links in the chat (Execute/Copy/Image buttons)."""

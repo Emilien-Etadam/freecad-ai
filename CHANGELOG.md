@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Plan-mode Execute button missing on long plans** (#50, reported by
+  @MusaAkyuz) — a plan that hit the `max_tokens` output limit was cut off
+  mid-code-block, so the closing ``` fence never arrived. Both fence regexes
+  require it, so the script rendered as unformatted prose and no Execute/Copy
+  buttons were emitted. The button was never generated — nothing was scrolled
+  off-screen. A truncated block now renders as a proper code block and gets a
+  **Copy** button; **Execute is withheld**, since running a script cut off
+  mid-expression raises a `SyntaxError` or leaves half-built geometry.
+- **Truncated responses are now flagged** (#50) — `finish_reason="length"`
+  (OpenAI-style) and `stop_reason="max_tokens"` (Anthropic) were both discarded,
+  so a plan simply stopped mid-line with no explanation. The chat now shows a
+  warning naming the current Max Tokens value and pointing at Settings.
+- **`` ```py `` and untagged code blocks now get an Execute button** (#50) — the
+  executor matched only `` ```python `` while the renderer styled any fence, so
+  models that tag fences differently produced a code block with no way to run it.
+  Non-Python fences (`` ```bash ``, `` ```json ``) remain non-executable.
+
 ## [0.21.0-alpha] - 2026-07-27
 
 A fix-and-cleanup release for the pre-execution recovery snapshots that
