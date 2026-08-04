@@ -20,11 +20,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Truncated responses are now flagged** (#50) — `finish_reason="length"`
   (OpenAI-style) and `stop_reason="max_tokens"` (Anthropic) were both discarded,
   so a plan simply stopped mid-line with no explanation. The chat now shows a
-  warning naming the current Max Tokens value and pointing at Settings.
+  warning naming the current Max Output Tokens value and pointing at Settings.
 - **`` ```py `` and untagged code blocks now get an Execute button** (#50) — the
   executor matched only `` ```python `` while the renderer styled any fence, so
   models that tag fences differently produced a code block with no way to run it.
   Non-Python fences (`` ```bash ``, `` ```json ``) remain non-executable.
+- **Act mode no longer acts on a truncated turn** (#52) — the tool-carrying
+  request paths discarded the same truncation signal #50 fixed for Plan mode,
+  collapsing `finish_reason="length"` into a normal finish. The agentic loop
+  could not tell a cut-off turn from a completed one, so it executed tool calls
+  parsed from a half-formed payload and let the model build on its own
+  mid-sentence output. The loop now **halts** on truncation without running that
+  turn's tool calls, and shows the truncation warning. A truncated turn still
+  counts against the max tool-call iteration budget — it consumed a real
+  request, and refunding it would let repeated truncations run past the limit.
+- **Streaming tool calls are no longer silently dropped on truncation** (#52) —
+  when an OpenAI-style stream ended with `finish_reason="length"`, the handler
+  matched only `"tool_calls"`/`"stop"`, so it never emitted the pending tool
+  calls *or* a `done` event. Those calls are now deliberately discarded (their
+  arguments JSON stops mid-object) and the turn ends cleanly.
 
 ## [0.21.0-alpha] - 2026-07-27
 
