@@ -32,13 +32,48 @@ class ExecutionResult:
     code: str
 
 
-# Regex to extract ```python ... ``` code blocks
-CODE_BLOCK_RE = re.compile(r"```python\s*\n(.*?)```", re.DOTALL)
+# Fence tags we treat as executable Python. Deliberately narrow: this text is
+# handed to exec(), so ```bash / ```json must never match. A bare ``` counts,
+# since models routinely omit the tag (issue #50).
+PYTHON_FENCE_TAGS = ("python", "py", "python3", "")
+
+# Regex to extract ```<tag> ... ``` code blocks. Tag is filtered afterwards.
+CODE_BLOCK_RE = re.compile(r"```(\w*)[ \t]*\n(.*?)```", re.DOTALL)
+
+# A fence opened but never closed — the response was cut off mid-block
+# (typically at max_tokens). Anchored to the end of the text.
+TRUNCATED_BLOCK_RE = re.compile(r"```(\w*)[ \t]*\n((?:(?!```).)*)\Z", re.DOTALL)
+
+
+def _is_python_fence(tag: str) -> bool:
+    return tag.lower() in PYTHON_FENCE_TAGS
 
 
 def extract_code_blocks(text: str) -> list[str]:
-    """Extract all Python code blocks from markdown-formatted text."""
-    return CODE_BLOCK_RE.findall(text)
+    """Extract all complete Python code blocks from markdown-formatted text.
+
+    Only closed blocks are returned — a block cut off mid-expression must never
+    reach exec(). Use :func:`extract_truncated_block` to recover those for display.
+    """
+    return [code for tag, code in CODE_BLOCK_RE.findall(text) if _is_python_fence(tag)]
+
+
+def extract_truncated_block(text: str) -> str | None:
+    """Return the body of a trailing unterminated code fence, if any.
+
+    A plan that hits ``max_tokens`` ends mid-code-block with no closing fence, so
+    the normal extractor finds nothing and the user is left with an unusable wall
+    of text (issue #50). This recovers the partial script so it can still be
+    rendered and copied — never executed.
+    """
+    # Strip complete blocks first so their content can't be mistaken for an
+    # unterminated one, then look for a fence opening in what remains.
+    remainder = CODE_BLOCK_RE.sub("", text)
+    match = TRUNCATED_BLOCK_RE.search(remainder)
+    if not match or not _is_python_fence(match.group(1)):
+        return None
+    code = match.group(2)
+    return code if code.strip() else None
 
 
 def _find_freecad_cmd() -> str:
