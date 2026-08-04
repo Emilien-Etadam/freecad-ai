@@ -323,7 +323,8 @@ def render_truncation_warning(max_tokens: int) -> str:
     msg = translate(
         "MessageView",
         "Response was cut off at the output limit ({max_tokens} tokens). "
-        "Raise Max Tokens in Settings, or ask the model to continue."
+        "Raise Max Output Tokens in Settings → Model Parameters, "
+        "or ask the model to continue."
     ).replace("{max_tokens}", str(max_tokens))
     return (
         f'<div style="margin: 6px 0; padding: 6px 10px; '
