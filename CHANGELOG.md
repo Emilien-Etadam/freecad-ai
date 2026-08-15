@@ -32,8 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Python handler can catch it — there is no display and no `QApplication` event
   loop. The harness now installs a fake `FreeCADGui` module into `sys.modules`
   instead, so the real one is never imported. Same view-cosmetics
-  neutralisation as before (#14), without the crash. Note that `Gui.Selection`
-  is now a no-op stub rather than the real (empty) selection API.
+  neutralisation as before (#14), without the crash. Note that the fake module
+  defines only `ActiveDocument`, `SendMsgToActiveView` and `updateGui`; the
+  no-op absorption applies *below* `Gui.ActiveDocument`, not to the module
+  itself. Any other `Gui` attribute — notably `Gui.Selection` and
+  `Gui.getDocument`, which the real module provides — now raises
+  `AttributeError` in the pre-check, so code that reads the selection fails the
+  pre-check while running fine live.
 
 ## [0.21.1-alpha] - 2026-08-05
 
