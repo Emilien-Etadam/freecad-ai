@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **MCP server reported a stale version to every client** — `SERVER_INFO` in
+  `freecad_ai/mcp/server.py` hardcoded `"0.1.0"`, so `claude mcp list`, Claude
+  Desktop and any other client displayed "FreeCAD AI 0.1.0" no matter which
+  release was installed. It now derives from `freecad_ai.__version__`. Cosmetic,
+  but actively misleading when diagnosing someone else's setup — and the value
+  had been wrong for twenty releases. Found while verifying the external-client
+  docs for #55; `MCPServer` had no test coverage at all, which is why nobody
+  caught it.
+
 ## [0.21.2-alpha] - 2026-08-15
 
 ### Fixed
