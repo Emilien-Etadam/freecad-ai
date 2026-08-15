@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`list_documents` raised AttributeError on every FreeCAD 1.1.x session**
+  (#57, reported and fixed by @s-light in #56) — the handler read
+  `doc.Modified`, but `App.Document` has no such property; the dirty flag lives
+  on the *Gui* document. The tool failed for all users on 1.1.x, not just the
+  Flatpak build it was reported against — confirmed locally against 1.1.1
+  (AppImage). The flag now comes from `Gui.getDocument(name).Modified`, falling
+  back to `False` when there is no GUI (the STDIO MCP server entry point runs
+  headless) or when the document is unknown to the Gui layer.
+
 ## [0.21.1-alpha] - 2026-08-05
 
 ### Fixed
