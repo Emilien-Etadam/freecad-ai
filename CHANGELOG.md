@@ -17,6 +17,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (AppImage). The flag now comes from `Gui.getDocument(name).Modified`, falling
   back to `False` when there is no GUI (the STDIO MCP server entry point runs
   headless) or when the document is unknown to the Gui layer.
+- **Sandbox pre-check picked the wrong FreeCAD install** (#58, by @s-light) —
+  `_find_freecad_cmd()` guessed from `~/bin` AppImages and `PATH`, which could
+  resolve to a completely unrelated install (a Snap package on `PATH` while the
+  live session runs from a Flatpak). That foreign binary loads its own
+  incompatible Draft/Arch/PySide stack and segfaults. The console binary is now
+  resolved from the running session's own `FreeCAD.getHomePath()` first, which
+  is guaranteed to match; the existing AppImage/`PATH` chain remains as a
+  fallback for builds that ship no `freecadcmd`.
+- **Sandbox segfaulted on any code importing Arch/BIM** (#58, by @s-light) —
+  the harness imported the real `FreeCADGui` and then patched `ActiveDocument`
+  to a no-op. But the crash happens *during* the import: the real module pulls
+  in PySide/Qt, and anything that later touches Arch dies in C++ where no
+  Python handler can catch it — there is no display and no `QApplication` event
+  loop. The harness now installs a fake `FreeCADGui` module into `sys.modules`
+  instead, so the real one is never imported. Same view-cosmetics
+  neutralisation as before (#14), without the crash. Note that `Gui.Selection`
+  is now a no-op stub rather than the real (empty) selection API.
 
 ## [0.21.1-alpha] - 2026-08-05
 
