@@ -540,6 +540,7 @@ class SSEServerTransport:
         self._sse_lock = threading.Lock()
         self._httpd = None
         self._serving = False
+        self._lifecycle_lock = threading.Lock()
         if allowed_hosts is None:
             allowed_hosts = _LOOPBACK_HOSTS | {host.lower()}
         self._allowed_hosts = frozenset(h.lower() for h in allowed_hosts)
@@ -573,21 +574,25 @@ class SSEServerTransport:
 
         Idempotent — binding an already-bound transport is a no-op.
         """
-        if self._httpd is None:
-            self._httpd = self._make_server()
+        with self._lifecycle_lock:
+            if self._httpd is None:
+                self._httpd = self._make_server()
 
     def serve(self, handler: Callable[[dict], dict | None] | None = None):
         """Serve until stop(). Requires a prior bind()."""
-        if handler is not None:
-            self._handler = handler
-        if self._httpd is None:
-            raise RuntimeError("bind() must be called before serve()")
+        with self._lifecycle_lock:
+            if handler is not None:
+                self._handler = handler
+            httpd = self._httpd
+            if httpd is None:
+                raise RuntimeError("bind() must be called before serve()")
+            self._serving = True
         logger.info("MCP SSE server listening on http://%s:%d", self._host, self._port)
-        self._serving = True
         try:
-            self._httpd.serve_forever()
+            httpd.serve_forever()
         finally:
-            self._serving = False
+            with self._lifecycle_lock:
+                self._serving = False
 
     def stop(self):
         """Shut down and release the socket. Safe when never bound.
@@ -596,11 +601,18 @@ class SSEServerTransport:
         waits on an event that only serve_forever's exit path sets, so calling
         it on a bound-but-never-served socket blocks forever. Bound but never
         served therefore goes straight to ``server_close()``.
+
+        The two values are captured under the lock and then released before
+        any blocking call: holding the lock across ``shutdown()`` would
+        deadlock against ``serve()``'s ``finally`` clause, which needs the
+        same lock to clear ``_serving``.
         """
-        httpd, self._httpd = self._httpd, None
+        with self._lifecycle_lock:
+            httpd, self._httpd = self._httpd, None
+            serving = self._serving
         if httpd is None:
             return
-        if self._serving:
+        if serving:
             httpd.shutdown()
         httpd.server_close()
 
