@@ -32,17 +32,30 @@ class FreeCADAIWorkbench(Gui.Workbench):
         dock = get_chat_dock()
         if dock:
             dock.show()
-        # A server started from the command line or the Python console before
-        # this workbench was ever opened is already running; push its state
-        # onto the toolbar action, since FreeCAD never asks for it.
+        self._sync_command_ticks()
+
+    def _sync_command_ticks(self):
+        """Push both checkable commands' state onto their actions.
+
+        FreeCAD never asks a Python command whether it is checked, so the
+        ticks are wrong until something pushes them. Both are stale at this
+        point for real reasons: a server started from the command line or the
+        Python console is already running before this workbench was ever
+        opened, and the keep-dock flag is restored from the saved config.
+
+        Split out of ``Activated`` so it is testable without a QApplication.
+        """
+        from freecad_ai.ui.command_state import set_command_checked
         try:
-            Gui.runCommand  # noqa: B018 - ensure Gui is live before touching commands
             from freecad_ai.mcp.gui_server import get_server_controller
-            running = get_server_controller().is_running()
-            command = Gui.Command.get("FreeCADAI_ToggleMCPServer")
-            if command:
-                for act in command.getAction():
-                    act.setChecked(running)
+            set_command_checked("FreeCADAI_ToggleMCPServer",
+                                get_server_controller().is_running())
+        except Exception:
+            pass
+        try:
+            from freecad_ai.config import get_config
+            set_command_checked("FreeCADAI_ToggleKeepDock",
+                                get_config().keep_dock_on_workbench_switch)
         except Exception:
             pass
 
@@ -133,7 +146,11 @@ class ToggleKeepDockCommand:
                 "ToggleKeepDockCommand",
                 "Toggle whether the FreeCAD AI chat panel stays open when "
                 "switching to other workbenches"),
-            "Checkable": True,
+            # False = starts unticked, matching the config default. FreeCAD
+            # 1.1.x reads this as the action's *initial* state rather than as
+            # "may this be checked", and never calls IsChecked(), so True
+            # showed a permanent checkmark whatever the setting said (#62).
+            "Checkable": False,
         }
 
     def Activated(self, index=0):
@@ -153,8 +170,18 @@ class ToggleKeepDockCommand:
             dock = get_chat_dock(create=False)
             if dock:
                 dock.hide()
+        self._sync_action()
+
+    def _sync_action(self):
+        """FreeCAD never calls IsChecked(), so drive the tick by hand (#62)."""
+        from freecad_ai.ui.command_state import set_command_checked
+        from freecad_ai.config import get_config
+        set_command_checked("FreeCADAI_ToggleKeepDock",
+                            get_config().keep_dock_on_workbench_switch)
 
     def IsChecked(self):
+        # Kept for a future FreeCAD that honours it; 1.1.x never calls this,
+        # so do not trust it to drive the tick — _sync_action() does that.
         try:
             from freecad_ai.config import get_config
             return bool(get_config().keep_dock_on_workbench_switch)
@@ -228,11 +255,9 @@ class ToggleMCPServerCommand:
         action's tick has to be driven from the controller by hand."""
         try:
             from freecad_ai.mcp.gui_server import get_server_controller
-            running = get_server_controller().is_running()
-            command = Gui.Command.get("FreeCADAI_ToggleMCPServer")
-            if command:
-                for act in command.getAction():
-                    act.setChecked(running)
+            from freecad_ai.ui.command_state import set_command_checked
+            set_command_checked("FreeCADAI_ToggleMCPServer",
+                                get_server_controller().is_running())
         except Exception:
             pass
 

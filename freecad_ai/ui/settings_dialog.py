@@ -1234,6 +1234,14 @@ class SettingsDialog(QDialog):
             rerank_model, self._read_rerank_params_table())
 
         save_current_config()
+
+        # The menu's "Keep Chat Panel Open" tick mirrors this flag, and
+        # FreeCAD never re-asks the command for its state, so changing it here
+        # would otherwise leave the checkmark stale until FreeCAD restarts.
+        from .command_state import set_command_checked
+        set_command_checked("FreeCADAI_ToggleKeepDock",
+                            cfg.keep_dock_on_workbench_switch)
+
         self.accept()
 
     def _on_rerank_method_changed(self, index: int):
