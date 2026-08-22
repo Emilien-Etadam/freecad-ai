@@ -32,6 +32,19 @@ class FreeCADAIWorkbench(Gui.Workbench):
         dock = get_chat_dock()
         if dock:
             dock.show()
+        # A server started from the command line or the Python console before
+        # this workbench was ever opened is already running; push its state
+        # onto the toolbar action, since FreeCAD never asks for it.
+        try:
+            Gui.runCommand  # noqa: B018 - ensure Gui is live before touching commands
+            from freecad_ai.mcp.gui_server import get_server_controller
+            running = get_server_controller().is_running()
+            command = Gui.Command.get("FreeCADAI_ToggleMCPServer")
+            if command:
+                for act in command.getAction():
+                    act.setChecked(running)
+        except Exception:
+            pass
 
     def Deactivated(self):
         """Called when leaving this workbench.
@@ -155,10 +168,15 @@ class ToggleKeepDockCommand:
 class ToggleMCPServerCommand:
     """Start/stop the HTTP+SSE MCP server inside this FreeCAD process.
 
-    Checkable, and IsChecked() asks the shared controller rather than any
-    state of its own — so a server started with
+    Checkable, and the tick is driven from the shared controller rather than
+    any state of its own — so a server started with
     ``FreeCAD.AppImage mcp_server_http.py`` or from the Python console shows
     as on here, and can be stopped from this button.
+
+    FreeCAD 1.1.x reads ``Checkable`` as the action's *initial* tick state —
+    the key's mere presence is what makes the action checkable — and never
+    calls ``IsChecked()`` on a Python command. So the value below must be
+    False, and the tick has to be pushed by ``_sync_action()``.
     """
 
     def GetResources(self):
@@ -171,7 +189,10 @@ class ToggleMCPServerCommand:
                 "Start or stop the MCP server, letting external clients such "
                 "as Claude Code drive this FreeCAD session. The server has no "
                 "authentication; set its address in AI Settings."),
-            "Checkable": True,
+            # False = starts unticked. FreeCAD treats this as the initial
+            # state, not as "may this action be checked"; True showed a ticked
+            # button on a fresh session with no server running.
+            "Checkable": False,
         }
 
     def Activated(self, index=0):
@@ -182,6 +203,7 @@ class ToggleMCPServerCommand:
         if controller.is_running():
             controller.stop()
             App.Console.PrintMessage("FreeCAD AI: MCP server stopped\n")
+            self._sync_action()
             return
 
         from freecad_ai.config import get_config
@@ -190,6 +212,7 @@ class ToggleMCPServerCommand:
             url = controller.start(host, port)
         except OSError as exc:
             self._report_failure(host, port, exc)
+            self._sync_action()  # a failed start must leave the button unticked
             return
 
         App.Console.PrintMessage(
@@ -198,6 +221,20 @@ class ToggleMCPServerCommand:
         if window:
             window.statusBar().showMessage(
                 "MCP server listening on %s" % url, 10000)
+        self._sync_action()
+
+    def _sync_action(self):
+        """FreeCAD 1.1.x never calls IsChecked() on a Python command, so the
+        action's tick has to be driven from the controller by hand."""
+        try:
+            from freecad_ai.mcp.gui_server import get_server_controller
+            running = get_server_controller().is_running()
+            command = Gui.Command.get("FreeCADAI_ToggleMCPServer")
+            if command:
+                for act in command.getAction():
+                    act.setChecked(running)
+        except Exception:
+            pass
 
     def _report_failure(self, host, port, exc):
         """Modal, because the click has to visibly fail.
@@ -218,6 +255,8 @@ class ToggleMCPServerCommand:
             message)
 
     def IsChecked(self):
+        # Kept for a future FreeCAD that honours it; 1.1.x never calls this,
+        # so do not trust it to drive the tick — _sync_action() does that.
         try:
             from freecad_ai.mcp.gui_server import get_server_controller
             return get_server_controller().is_running()

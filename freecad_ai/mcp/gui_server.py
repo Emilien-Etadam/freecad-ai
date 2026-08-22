@@ -94,6 +94,14 @@ class ServerController:
         if self.is_running():
             return self._url
 
+        # A serve thread that died on its own leaves is_running() False while the
+        # listening socket is still open. Reap it, or every later start() on this
+        # port fails with EADDRINUSE until FreeCAD restarts.
+        if self._transport is not None:
+            self._transport.stop()
+            self._transport = None
+            self._url = None
+
         from .transport import SSEServerTransport
 
         transport = SSEServerTransport(host=host, port=port)

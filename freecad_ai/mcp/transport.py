@@ -606,10 +606,29 @@ class SSEServerTransport:
         any blocking call: holding the lock across ``shutdown()`` would
         deadlock against ``serve()``'s ``finally`` clause, which needs the
         same lock to clear ``_serving``.
+
+        Shutting the listening socket down does not touch an already-attached
+        SSE client: its ``process_request_thread`` sits in the keepalive loop
+        and keeps writing, so the client never learns the server went away and
+        its later POSTs are answered 202 by a transport that drops the reply.
+        Closing ``_sse_wfile`` here makes the next keepalive write fail, which
+        ends that thread and gives the client a clean EOF. Everything else
+        already treats a None ``_sse_wfile`` as "no client attached", which is
+        exactly the state left behind. Done outside ``_lifecycle_lock`` for
+        the same deadlock reason as above.
         """
         with self._lifecycle_lock:
             httpd, self._httpd = self._httpd, None
             serving = self._serving
+
+        with self._sse_lock:
+            wfile, self._sse_wfile = self._sse_wfile, None
+        if wfile is not None:
+            try:
+                wfile.close()
+            except Exception:
+                pass
+
         if httpd is None:
             return
         if serving:

@@ -7,7 +7,6 @@ one controller so the toggle cannot misreport a server it did not start.
 """
 
 import socket
-import threading
 import time
 
 import pytest
@@ -175,6 +174,33 @@ def test_is_running_is_false_once_the_serve_thread_exits():
         time.sleep(0.05)
     assert controller.is_running() is False
     controller.stop()
+
+
+def test_start_reaps_the_socket_a_dead_serve_thread_left_open():
+    """A serve thread that dies must not squat the port for the session.
+
+    ``serve_forever()`` returning without ``server_close()`` is exactly what
+    an exception inside the serve thread leaves behind: is_running() goes
+    False while the listening socket is still open. Before the reap in
+    start(), every later start() on that port raised EADDRINUSE until FreeCAD
+    was restarted.
+    """
+    controller = _controller()
+    port = _free_port()
+    try:
+        controller.start("127.0.0.1", port)
+        controller._transport._httpd.shutdown()  # thread exits, socket stays
+        deadline = time.time() + 5
+        while controller.is_running() and time.time() < deadline:
+            time.sleep(0.05)
+        assert controller.is_running() is False
+
+        controller.start("127.0.0.1", port)  # must not raise EADDRINUSE
+        assert controller.is_running() is True
+        with socket.create_connection(("127.0.0.1", port), timeout=2):
+            pass  # and the new server really owns the port
+    finally:
+        controller.stop()
 
 
 def test_get_server_controller_returns_one_shared_instance():
