@@ -10,8 +10,10 @@ Covers two issues found in code review:
 
 import pathlib
 import socket
+import sys
 import threading
 import time
+import types
 import urllib.error
 import urllib.request
 
@@ -313,3 +315,37 @@ def test_run_still_binds_and_serves():
     transport.stop()
     thread.join(timeout=5)
     assert not thread.is_alive()
+
+
+def test_http_entry_point_delegates_to_the_shared_controller(monkeypatch):
+    """The script must not build its own server.
+
+    A server it owned privately would be invisible to the toolbar toggle,
+    which would then render unchecked and try to bind the same port again.
+    """
+    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    source = (repo_root / "mcp_server_http.py").read_text()
+
+    fake_freecad = types.ModuleType("FreeCAD")
+    fake_freecad.ActiveDocument = object()
+    fake_freecad.newDocument = lambda name: None
+    monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
+
+    started = []
+
+    class _FakeController:
+        def start(self, host, port):
+            started.append((host, port))
+            return "http://%s:%d/sse" % (host, port)
+
+    import freecad_ai.mcp.gui_server as gui_server
+    monkeypatch.setattr(gui_server, "get_server_controller",
+                        lambda: _FakeController())
+
+    # Pin both so the assertion cannot depend on the developer's config.json.
+    monkeypatch.setenv("MCP_HOST", "127.0.0.1")
+    monkeypatch.setenv("MCP_PORT", "3131")
+
+    exec(compile(source, "mcp_server_http.py", "exec"), {})
+
+    assert started == [("127.0.0.1", 3131)]
