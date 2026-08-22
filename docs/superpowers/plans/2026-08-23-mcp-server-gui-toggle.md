@@ -96,6 +96,24 @@ def test_stop_without_bind_does_not_raise():
     SSEServerTransport(host="127.0.0.1", port=_free_port()).stop()
 
 
+def test_stop_after_bind_without_serve_does_not_hang():
+    """BaseServer.shutdown() waits on an event only serve_forever() sets.
+
+    Calling it on a bound-but-never-served socket blocks forever, so this
+    fails as a timeout rather than an assertion if stop() gets it wrong.
+    """
+    transport = SSEServerTransport(host="127.0.0.1", port=_free_port())
+    transport.bind()
+    finished = threading.Event()
+
+    def _stop():
+        transport.stop()
+        finished.set()
+
+    threading.Thread(target=_stop, daemon=True).start()
+    assert finished.wait(timeout=5), "stop() hung on a bound-but-unserved server"
+
+
 def test_serve_before_bind_raises_runtime_error():
     transport = SSEServerTransport(host="127.0.0.1", port=_free_port())
     with pytest.raises(RuntimeError):
@@ -133,10 +151,11 @@ Expected: FAIL — `AttributeError: 'SSEServerTransport' object has no attribute
 
 - [ ] **Step 3: Add the `_httpd` slot**
 
-In `freecad_ai/mcp/transport.py`, in `SSEServerTransport.__init__`, add one line immediately after `self._sse_lock = threading.Lock()`:
+In `freecad_ai/mcp/transport.py`, in `SSEServerTransport.__init__`, add two lines immediately after `self._sse_lock = threading.Lock()`:
 
 ```python
         self._httpd = None
+        self._serving = False
 ```
 
 - [ ] **Step 4: Replace `run()` with the split lifecycle**
@@ -175,14 +194,25 @@ with:
         if self._httpd is None:
             raise RuntimeError("bind() must be called before serve()")
         logger.info("MCP SSE server listening on http://%s:%d", self._host, self._port)
-        self._httpd.serve_forever()
+        self._serving = True
+        try:
+            self._httpd.serve_forever()
+        finally:
+            self._serving = False
 
     def stop(self):
-        """Shut down and release the socket. Safe when never bound."""
+        """Shut down and release the socket. Safe when never bound.
+
+        ``shutdown()`` is only safe once ``serve_forever()`` is running: it
+        waits on an event that only serve_forever's exit path sets, so calling
+        it on a bound-but-never-served socket blocks forever. Bound but never
+        served therefore goes straight to ``server_close()``.
+        """
         httpd, self._httpd = self._httpd, None
         if httpd is None:
             return
-        httpd.shutdown()
+        if self._serving:
+            httpd.shutdown()
         httpd.server_close()
 
     def run(self, handler: Callable[[dict], dict | None]):
