@@ -7,8 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Start and stop the MCP server from the toolbar** — a checkable **MCP Server**
+  command in the FreeCAD AI toolbar and menu starts the HTTP/SSE server in the
+  running FreeCAD, so external clients no longer need a command-line launch or a
+  pasted `exec(open(...))` snippet. Suggested by @s-light on
+  [#55](https://github.com/ghbalf/freecad-ai/issues/55).
+  The button reports the true state: a server started via
+  `FreeCAD.AppImage mcp_server_http.py` or from the Python console shows as
+  running and can be stopped from the button, because all three routes now share
+  one controller.
+  Host and port are configurable under **AI Settings → MCP Servers**, with
+  `MCP_HOST`/`MCP_PORT` still taking precedence. Note the server has **no
+  authentication** — see [#59](https://github.com/ghbalf/freecad-ai/issues/59).
+
 ### Fixed
 
+- **A failed MCP server start was silent** — the listening socket was created
+  inside the server thread, so a port conflict raised `OSError` in a daemon
+  thread and vanished: no dialog, no log the user would see, FreeCAD carrying on
+  as though the server were up. `mcp_server_http.py` compounded it by printing
+  `MCP SSE server running on ...` *before* attempting the bind. The bind now
+  happens before anything is announced, and failures reach the caller.
+- **The MCP server could not be stopped** — `SSEServerTransport` never kept a
+  handle on its HTTP server, so the only way to stop it was to quit FreeCAD. It
+  now has a `stop()` that shuts down and releases the port.
 - **MCP server reported a stale version to every client** — `SERVER_INFO` in
   `freecad_ai/mcp/server.py` hardcoded `"0.1.0"`, so `claude mcp list`, Claude
   Desktop and any other client displayed "FreeCAD AI 0.1.0" no matter which
