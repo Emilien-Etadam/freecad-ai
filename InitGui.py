@@ -20,8 +20,10 @@ class FreeCADAIWorkbench(Gui.Workbench):
 
     def Initialize(self):
         """Called when the workbench is first activated."""
-        self.appendToolbar("FreeCAD AI", ["FreeCADAI_OpenChat", "FreeCADAI_OpenSettings"])
+        self.appendToolbar("FreeCAD AI", ["FreeCADAI_OpenChat", "FreeCADAI_OpenSettings",
+                                          "FreeCADAI_ToggleMCPServer"])
         self.appendMenu("FreeCAD AI", ["FreeCADAI_OpenChat", "FreeCADAI_OpenSettings",
+                                       "FreeCADAI_ToggleMCPServer",
                                        "FreeCADAI_ToggleKeepDock"])
 
     def Activated(self):
@@ -150,6 +152,82 @@ class ToggleKeepDockCommand:
         return True
 
 
+class ToggleMCPServerCommand:
+    """Start/stop the HTTP+SSE MCP server inside this FreeCAD process.
+
+    Checkable, and IsChecked() asks the shared controller rather than any
+    state of its own — so a server started with
+    ``FreeCAD.AppImage mcp_server_http.py`` or from the Python console shows
+    as on here, and can be stopped from this button.
+    """
+
+    def GetResources(self):
+        from freecad_ai.i18n import translate
+        return {
+            "GroupName": "FreeCAD AI",
+            "MenuText": translate("ToggleMCPServerCommand", "MCP Server"),
+            "ToolTip": translate(
+                "ToggleMCPServerCommand",
+                "Start or stop the MCP server, letting external clients such "
+                "as Claude Code drive this FreeCAD session. The server has no "
+                "authentication; set its address in AI Settings."),
+            "Checkable": True,
+        }
+
+    def Activated(self, index=0):
+        from freecad_ai.mcp.gui_server import (
+            get_server_controller, resolve_server_address)
+        controller = get_server_controller()
+
+        if controller.is_running():
+            controller.stop()
+            App.Console.PrintMessage("FreeCAD AI: MCP server stopped\n")
+            return
+
+        from freecad_ai.config import get_config
+        host, port = resolve_server_address(get_config())
+        try:
+            url = controller.start(host, port)
+        except OSError as exc:
+            self._report_failure(host, port, exc)
+            return
+
+        App.Console.PrintMessage(
+            "FreeCAD AI: MCP server listening on %s\n" % url)
+        window = Gui.getMainWindow()
+        if window:
+            window.statusBar().showMessage(
+                "MCP server listening on %s" % url, 10000)
+
+    def _report_failure(self, host, port, exc):
+        """Modal, because the click has to visibly fail.
+
+        This used to be a traceback in a daemon thread that nothing surfaced.
+        """
+        from freecad_ai.i18n import translate
+        from freecad_ai.ui.compat import QtWidgets
+        message = translate(
+            "ToggleMCPServerCommand",
+            "Could not start the MCP server on {address}.\n\n{error}\n\n"
+            "Change the address in FreeCAD AI → AI Settings → "
+            "MCP Servers.").format(address="%s:%d" % (host, port), error=exc)
+        App.Console.PrintError("FreeCAD AI: %s\n" % message.replace("\n\n", " "))
+        QtWidgets.QMessageBox.warning(
+            Gui.getMainWindow(),
+            translate("ToggleMCPServerCommand", "MCP server failed to start"),
+            message)
+
+    def IsChecked(self):
+        try:
+            from freecad_ai.mcp.gui_server import get_server_controller
+            return get_server_controller().is_running()
+        except Exception:
+            return False
+
+    def IsActive(self):
+        return True
+
+
 # Register translation path early so command strings are translated
 # before the workbench is activated.
 try:
@@ -196,4 +274,5 @@ except Exception:
 Gui.addCommand("FreeCADAI_OpenChat", OpenChatCommand())
 Gui.addCommand("FreeCADAI_OpenSettings", OpenSettingsCommand())
 Gui.addCommand("FreeCADAI_ToggleKeepDock", ToggleKeepDockCommand())
+Gui.addCommand("FreeCADAI_ToggleMCPServer", ToggleMCPServerCommand())
 Gui.addWorkbench(FreeCADAIWorkbench())
