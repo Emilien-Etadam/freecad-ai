@@ -538,6 +538,8 @@ class SSEServerTransport:
         self._handler: Callable[[dict], dict | None] | None = None
         self._sse_wfile: Any = None
         self._sse_lock = threading.Lock()
+        self._httpd = None
+        self._serving = False
         if allowed_hosts is None:
             allowed_hosts = _LOOPBACK_HOSTS | {host.lower()}
         self._allowed_hosts = frozenset(h.lower() for h in allowed_hosts)
@@ -561,12 +563,52 @@ class SSEServerTransport:
             return False
         return True
 
-    def run(self, handler: Callable[[dict], dict | None]):
-        """Start the HTTP server (blocking)."""
-        self._handler = handler
-        server = self._make_server()
+    def bind(self):
+        """Create and bind the listening socket. Raises OSError if unavailable.
+
+        Split out of ``run`` so a caller on the GUI thread learns about a bind
+        failure (EADDRINUSE, EACCES) synchronously. When the bind happened
+        inside the serve thread the traceback went to the console and nothing
+        else: FreeCAD carried on as if the server had started.
+
+        Idempotent — binding an already-bound transport is a no-op.
+        """
+        if self._httpd is None:
+            self._httpd = self._make_server()
+
+    def serve(self, handler: Callable[[dict], dict | None] | None = None):
+        """Serve until stop(). Requires a prior bind()."""
+        if handler is not None:
+            self._handler = handler
+        if self._httpd is None:
+            raise RuntimeError("bind() must be called before serve()")
         logger.info("MCP SSE server listening on http://%s:%d", self._host, self._port)
-        server.serve_forever()
+        self._serving = True
+        try:
+            self._httpd.serve_forever()
+        finally:
+            self._serving = False
+
+    def stop(self):
+        """Shut down and release the socket. Safe when never bound.
+
+        ``shutdown()`` is only safe once ``serve_forever()`` is running: it
+        waits on an event that only serve_forever's exit path sets, so calling
+        it on a bound-but-never-served socket blocks forever. Bound but never
+        served therefore goes straight to ``server_close()``.
+        """
+        httpd, self._httpd = self._httpd, None
+        if httpd is None:
+            return
+        if self._serving:
+            httpd.shutdown()
+        httpd.server_close()
+
+    def run(self, handler: Callable[[dict], dict | None]):
+        """Start the HTTP server (blocking). Unchanged: bind, then serve."""
+        self._handler = handler
+        self.bind()
+        self.serve()
 
     def _make_server(self):
         """Build the threaded HTTP server (split out for testability)."""

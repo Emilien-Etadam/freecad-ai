@@ -9,7 +9,9 @@ Covers two issues found in code review:
 """
 
 import pathlib
+import socket
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -206,3 +208,108 @@ def test_http_entry_point_safe_under_exec():
                 "breaks the documented exec(open(...).read()) usage"
             )
         raise
+
+
+# ---------------------------------------------------------------------------
+# Split lifecycle — bind() / serve() / stop()
+#
+# run() used to build the HTTP server *inside* the serve thread, so a port
+# conflict raised OSError in a daemon thread: FreeCAD carried on with no
+# dialog and no status change. bind() moves that failure onto the caller.
+# ---------------------------------------------------------------------------
+
+def _free_port():
+    """Pick a port that is free right now."""
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    return port
+
+
+def test_bind_raises_when_the_port_is_taken():
+    blocker = socket.socket()
+    blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    port = blocker.getsockname()[1]
+    try:
+        transport = SSEServerTransport(host="127.0.0.1", port=port)
+        with pytest.raises(OSError):
+            transport.bind()
+    finally:
+        blocker.close()
+
+
+def test_bind_is_idempotent():
+    transport = SSEServerTransport(host="127.0.0.1", port=_free_port())
+    try:
+        transport.bind()
+        transport.bind()  # must not raise "address already in use" against itself
+    finally:
+        transport.stop()
+
+
+def test_stop_releases_the_socket():
+    port = _free_port()
+    first = SSEServerTransport(host="127.0.0.1", port=port)
+    first.bind()
+    first.stop()
+
+    second = SSEServerTransport(host="127.0.0.1", port=port)
+    try:
+        second.bind()  # must not raise — the first one really let go
+    finally:
+        second.stop()
+
+
+def test_stop_without_bind_does_not_raise():
+    SSEServerTransport(host="127.0.0.1", port=_free_port()).stop()
+
+
+def test_stop_after_bind_without_serve_does_not_hang():
+    """BaseServer.shutdown() waits on an event only serve_forever() sets.
+
+    Calling it on a bound-but-never-served socket blocks forever, so this
+    fails as a timeout rather than an assertion if stop() gets it wrong.
+    """
+    transport = SSEServerTransport(host="127.0.0.1", port=_free_port())
+    transport.bind()
+    finished = threading.Event()
+
+    def _stop():
+        transport.stop()
+        finished.set()
+
+    threading.Thread(target=_stop, daemon=True).start()
+    assert finished.wait(timeout=5), "stop() hung on a bound-but-unserved server"
+
+
+def test_serve_before_bind_raises_runtime_error():
+    transport = SSEServerTransport(host="127.0.0.1", port=_free_port())
+    with pytest.raises(RuntimeError):
+        transport.serve(lambda msg: None)
+
+
+def test_run_still_binds_and_serves():
+    """run() must keep working unchanged — entry scripts and users call it."""
+    port = _free_port()
+    transport = SSEServerTransport(host="127.0.0.1", port=port)
+    thread = threading.Thread(
+        target=transport.run, args=(lambda msg: None,), daemon=True)
+    thread.start()
+
+    deadline = time.time() + 5
+    connected = False
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                connected = True
+                break
+        except OSError:
+            time.sleep(0.05)
+    assert connected, "run() never started listening"
+
+    transport.stop()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
