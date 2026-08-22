@@ -146,7 +146,9 @@ invocation and `MCP_PORT=3123`-style overrides.
 
 ### Modified: `freecad_ai/ui/settings_dialog.py`
 
-In the MCP section: a host line edit, a port spinbox (1024–65535), and a warning label:
+In the MCP section: a host line edit, a **plain numeric entry** for the port
+(`QLineEdit` with a `QIntValidator(1, 65535)` — not a spinbox, and deliberately no 1024
+floor, so the GUI can reach exactly the same ports as `MCP_PORT`), and a warning label:
 
 > The MCP server has no authentication. Anything that can reach this address can run
 > FreeCAD tools, including arbitrary Python. Keep it on 127.0.0.1 unless you understand
@@ -185,8 +187,9 @@ MCP client → POST /messages → MCPServer._handle
 | Condition | Behaviour |
 |-----------|-----------|
 | Port already in use | `bind()` raises `OSError` on the click thread; modal names the port and suggests changing it in Settings |
-| Permission denied (port < 1024) | Same path; spinbox minimum of 1024 makes it unreachable from the GUI |
+| Permission denied (port < 1024, unprivileged process) | `bind()` raises `PermissionError` (an `OSError` subclass); same modal path, naming the port and that privileged ports need root |
 | Invalid host string | `bind()` raises `socket.gaierror` (an `OSError` subclass); same modal path |
+| Port field empty or out of range | `QIntValidator` blocks out-of-range input; an empty field falls back to the configured value |
 | Server thread dies after start | `is_running()` returns `False`; button unchecks on next poll |
 | `stop()` with nothing running | No-op |
 | `stop()` with a client attached mid-stream | `shutdown()` returns once handlers finish; the SSE stream closes and the client sees a disconnect |
@@ -225,14 +228,14 @@ Manual verification, on FreeCAD 1.1.1:
    already checked; clicking it stops the CLI-started server
 4. Occupy the port first, then click → modal names the conflict, button stays unchecked
 
-## Follow-up issues (to file, not part of this work)
+## Follow-up issues (filed, not part of this work)
 
-1. **MCP server has no authentication.** Add an optional bearer token: generate with
+1. **[#59](https://github.com/ghbalf/freecad-ai/issues/59) — MCP server has no authentication.** Add an optional bearer token: generate with
    `secrets.token_urlsafe(32)`, compare with `hmac.compare_digest()` in the existing
    `_authorized()` choke point, surface the token alongside the URL. Both stdlib.
    Claude Code supports `-H "Authorization: Bearer ..."`, and the workbench's own client
    already has a headers table, so no client work is needed.
-2. **`MCP_HOST=0.0.0.0` is a confusing dead end.** The socket binds on all interfaces,
+2. **[#60](https://github.com/ghbalf/freecad-ai/issues/60) — `MCP_HOST=0.0.0.0` is a confusing dead end.** The socket binds on all interfaces,
    but the `Host`-header allowlist is `loopback ∪ {"0.0.0.0"}`, and a LAN client dialling
    `192.168.1.50:3000` sends that as its `Host` — so it gets 403 while everything looks
    healthy server-side. Either widen the allowlist when the bind address is a wildcard,
