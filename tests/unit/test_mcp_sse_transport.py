@@ -349,3 +349,55 @@ def test_http_entry_point_delegates_to_the_shared_controller(monkeypatch):
     exec(compile(source, "mcp_server_http.py", "exec"), {})
 
     assert started == [("127.0.0.1", 3131)]
+
+
+# ---------------------------------------------------------------------------
+# Issue #63 — a wedged SSE client must not be able to freeze stop()
+# ---------------------------------------------------------------------------
+#
+# ``_write_locked`` holds ``_sse_lock`` across the write *and* flush (that is
+# deliberate — see Issue A above), and ``stop()`` needs the same lock to detach
+# the client. With no socket timeout, a client that stops reading lets the send
+# buffer fill and blocks the writing thread inside the lock forever, so a
+# ``stop()`` called from the Qt main thread freezes the whole FreeCAD GUI.
+#
+# The end-to-end freeze is not reproducible in a unit test: it needs a real
+# peer that has stopped reading plus megabytes of payload to fill the socket
+# buffers. These two tests pin the mechanism that prevents it instead — the
+# connection has a finite timeout, and a timed-out write is treated as a
+# dropped client rather than propagating.
+
+def test_sse_connection_has_a_send_timeout():
+    """Without this the write blocks forever and stop() can never get the lock."""
+    transport = SSEServerTransport(port=0)
+    transport.bind()
+    try:
+        handler_cls = transport._httpd.RequestHandlerClass
+        # StreamRequestHandler.setup() only calls settimeout() when this is
+        # not None, so None means "block indefinitely".
+        assert handler_cls.timeout is not None
+        assert handler_cls.timeout > 0
+    finally:
+        transport.stop()
+
+
+def test_write_locked_drops_the_client_on_timeout():
+    """socket.timeout is TimeoutError (a subclass of OSError) since Python 3.10,
+    so the existing handler already covers it — this pins that coupling, because
+    narrowing the except clause would reintroduce the hang."""
+
+    class _TimingOutWfile:
+        def write(self, data):
+            raise socket.timeout("timed out")
+
+        def flush(self):  # pragma: no cover - never reached
+            pass
+
+    transport = SSEServerTransport()
+    transport._sse_wfile = _TimingOutWfile()
+
+    assert transport._write_locked(b"payload") is False
+    assert transport._sse_wfile is None
+    # The lock must be free afterwards, or stop() would still block on it.
+    assert transport._sse_lock.acquire(blocking=False)
+    transport._sse_lock.release()

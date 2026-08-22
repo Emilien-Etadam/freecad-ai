@@ -646,6 +646,16 @@ class SSEServerTransport:
         transport = self
 
         class RequestHandler(BaseHTTPRequestHandler):
+            # Without a timeout the connection socket blocks forever, and
+            # ``_write_locked`` holds ``_sse_lock`` across its write: a client
+            # that stops reading would pin that lock and freeze ``stop()`` —
+            # which runs on the Qt main thread — hanging all of FreeCAD (#63).
+            # ``StreamRequestHandler.setup()`` applies this via settimeout().
+            # Generous enough that a merely slow client is not dropped; a
+            # timed-out write surfaces as ``socket.timeout``, which is
+            # ``TimeoutError`` and so already handled as a dropped client.
+            timeout = 30
+
             def log_message(self, fmt, *args):
                 logger.debug(fmt, *args)
 
