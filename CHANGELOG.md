@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.22.0-alpha] - 2026-08-23
 
 ### Added
 
@@ -41,6 +41,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   had been wrong for twenty releases. Found while verifying the external-client
   docs for #55; `MCPServer` had no test coverage at all, which is why nobody
   caught it.
+- **"Keep Chat Panel Open" always showed a checkmark** — the menu entry's tick
+  was pinned on from the moment the workbench loaded and never moved, whatever
+  the setting actually was. FreeCAD 1.1.x reads a command's `Checkable`
+  resource as the action's *initial* state rather than as "this action may be
+  checked", and never calls a Python command's `IsChecked()`, so the tick has
+  to be pushed by hand. It now is — from the command itself, from workbench
+  activation, and from the Settings dialog.
+  [#62](https://github.com/ghbalf/freecad-ai/issues/62)
+- **A stuck MCP client could freeze FreeCAD** — SSE writes are serialized under
+  a lock that `stop()` also needs, and the connection had no timeout, so a
+  client that stopped reading could block the write indefinitely and hang the
+  Stop button on the Qt main thread. The connection now times out, which drops
+  the wedged client instead of freezing the GUI.
+  [#63](https://github.com/ghbalf/freecad-ai/issues/63)
 
 ## [0.21.2-alpha] - 2026-08-15
 
