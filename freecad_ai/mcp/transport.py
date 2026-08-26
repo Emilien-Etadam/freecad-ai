@@ -511,6 +511,10 @@ class StdioServerTransport:
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
+# A wildcard bind address is not a name any client's Host header ever
+# carries, so it cannot seed the default Host allowlist (see __init__).
+_WILDCARD_BIND_HOSTS = frozenset({"0.0.0.0", "::"})
+
 
 class SSEServerTransport:
     """Server-side transport: serves MCP over HTTP + Server-Sent Events.
@@ -542,6 +546,14 @@ class SSEServerTransport:
         self._serving = False
         self._lifecycle_lock = threading.Lock()
         if allowed_hosts is None:
+            if host.lower() in _WILDCARD_BIND_HOSTS:
+                raise OSError(
+                    "MCP_HOST=%s binds every interface, but no real client's "
+                    "Host header ever names a wildcard address, so every LAN "
+                    "client would get a 403. Set MCP_HOST to the concrete "
+                    "interface address clients will dial (e.g. your LAN IP), "
+                    "or pass allowed_hosts explicitly to opt into a wider "
+                    "policy." % host)
             allowed_hosts = _LOOPBACK_HOSTS | {host.lower()}
         self._allowed_hosts = frozenset(h.lower() for h in allowed_hosts)
         self._allowed_origins = frozenset(allowed_origins)

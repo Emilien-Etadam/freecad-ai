@@ -144,6 +144,22 @@ def test_request_allows_explicitly_configured_bind_host():
     assert transport._request_allowed("192.168.1.5:3000", None) is True
 
 
+@pytest.mark.parametrize("wildcard_host", ["0.0.0.0", "::"])
+def test_wildcard_bind_host_rejected_instead_of_locking_out_every_client(
+        wildcard_host):
+    # A wildcard bind address is not a name any real client's Host header
+    # ever carries, so seeding the default allowlist from it locks out every
+    # LAN client instead of the loopback-only client it was meant to guard.
+    with pytest.raises(OSError, match="MCP_HOST"):
+        SSEServerTransport(host=wildcard_host)
+
+
+def test_wildcard_bind_host_allowed_with_explicit_allowed_hosts():
+    transport = SSEServerTransport(
+        host="0.0.0.0", allowed_hosts=["fileserver.local"])
+    assert transport._request_allowed("fileserver.local:3000", None) is True
+
+
 def test_cross_origin_post_rejected_and_no_wildcard_cors_header():
     transport = SSEServerTransport(host="127.0.0.1", port=0)
     transport._handler = lambda msg: {
