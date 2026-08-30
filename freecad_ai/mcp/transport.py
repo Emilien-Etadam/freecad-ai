@@ -693,10 +693,34 @@ class HTTPServerTransport:
             def do_GET(self):
                 if not self._authorized():
                     return
-                if self._base_path() == "/sse":
+                path = self._base_path()
+                if path == "/sse":
                     self._handle_sse()
+                elif path == "/mcp":
+                    # The spec allows a server that offers no server-to-client
+                    # stream to refuse GET outright, and we originate no
+                    # server-initiated messages.
+                    self._send_method_not_allowed()
                 else:
                     self.send_error(404)
+
+            def do_DELETE(self):
+                # _authorized() is invoked per-verb by hand — BaseHTTPRequest-
+                # Handler has no dispatch layer to hook — so a new verb that
+                # forgets this call silently bypasses the Host/Origin guard.
+                if not self._authorized():
+                    return
+                if self._base_path() == "/mcp":
+                    # DELETE terminates a session. We issue none.
+                    self._send_method_not_allowed()
+                else:
+                    self.send_error(404)
+
+            def _send_method_not_allowed(self):
+                self.send_response(405)
+                self.send_header("Allow", "POST")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
 
             def do_POST(self):
                 if not self._authorized():

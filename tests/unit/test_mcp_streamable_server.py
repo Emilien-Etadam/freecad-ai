@@ -192,3 +192,48 @@ class TestStreamableAuthorization:
                 headers={"Host": "fileserver.local"})
 
         assert status == 200
+
+
+class TestStreamableMethods:
+    def test_get_on_mcp_is_405_with_an_allow_header(self):
+        """A server offering no server-to-client stream may refuse GET, and
+        the spec says so explicitly. Allow: POST tells the client what to do."""
+        with _RunningServer() as srv:
+            status, _, headers = _request(srv.port, method="GET")
+
+        assert status == 405
+        assert headers.get("Allow") == "POST"
+
+    def test_delete_on_mcp_is_405(self):
+        """DELETE terminates a session; we never issue one."""
+        with _RunningServer() as srv:
+            status, _, headers = _request(srv.port, method="DELETE")
+
+        assert status == 405
+        assert headers.get("Allow") == "POST"
+
+    def test_delete_is_authorized_like_every_other_verb(self):
+        """_authorized() is called per-verb by hand, not by middleware, so a
+        new verb silently skips the guard unless it calls it."""
+        with _RunningServer() as srv:
+            status, _, _ = _request(
+                srv.port, method="DELETE",
+                headers={"Host": "attacker.example"})
+
+        assert status == 403
+
+    def test_an_unknown_path_is_still_404(self):
+        with _RunningServer() as srv:
+            status, _, _ = _request(srv.port, path="/nope", method="GET")
+
+        assert status == 404
+
+    def test_the_legacy_messages_path_still_answers_post(self):
+        """/mcp must not have stolen the legacy route on the way in."""
+        with _RunningServer() as srv:
+            status, _, _ = _request(
+                srv.port, path="/messages",
+                data=b'{"jsonrpc":"2.0","id":1,"method":"ping"}',
+                headers={"Content-Type": "application/json"})
+
+        assert status == 202
