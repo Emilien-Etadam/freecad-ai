@@ -296,3 +296,84 @@ class TestProtocolVersionHeader:
                          "MCP-Protocol-Version": "2026-07-28"})
 
         assert status == 202
+
+
+class TestClientServerRoundTrip:
+    """Our own Streamable HTTP client against our own Streamable HTTP server.
+
+    The client has spoken this transport since #41 and already sends
+    ``Accept: application/json, text/event-stream`` and parses an inline JSON
+    body, so the two halves exercise each other with no external MCP client.
+    """
+
+    @staticmethod
+    def _mcp_handler(msg):
+        method = msg.get("method")
+        msg_id = msg.get("id")
+        if msg_id is None:
+            return None
+        if method == "initialize":
+            return protocol.make_response(msg_id, {
+                "protocolVersion": protocol.DEFAULT_PROTOCOL_VERSION,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "test", "version": "0"},
+            })
+        if method == "tools/list":
+            return protocol.make_response(msg_id, {
+                "tools": [{"name": "ping", "description": "",
+                           "inputSchema": {"type": "object"}}]})
+        if method == "tools/call":
+            return protocol.make_response(msg_id, {
+                "content": [{"type": "text", "text": "pong"}],
+                "isError": False})
+        return protocol.make_error(msg_id, protocol.METHOD_NOT_FOUND, method)
+
+    def test_handshake_list_and_call(self):
+        from freecad_ai.mcp.transport import StreamableHTTPClientTransport
+
+        with _RunningServer(handler=self._mcp_handler) as srv:
+            client = StreamableHTTPClientTransport(
+                f"http://127.0.0.1:{srv.port}/mcp", connect_timeout=5)
+            client.start()
+            try:
+                init = client.send_request(
+                    "initialize",
+                    {"protocolVersion": protocol.DEFAULT_PROTOCOL_VERSION},
+                    timeout=5)
+                assert init["result"]["protocolVersion"] == \
+                    protocol.DEFAULT_PROTOCOL_VERSION
+
+                tools = client.send_request("tools/list", timeout=5)
+                assert tools["result"]["tools"][0]["name"] == "ping"
+
+                call = client.send_request(
+                    "tools/call", {"name": "ping", "arguments": {}}, timeout=5)
+                assert call["result"]["content"][0]["text"] == "pong"
+            finally:
+                client.stop()
+
+    def test_a_notification_round_trips_without_a_body(self):
+        from freecad_ai.mcp.transport import StreamableHTTPClientTransport
+
+        with _RunningServer(handler=self._mcp_handler) as srv:
+            client = StreamableHTTPClientTransport(
+                f"http://127.0.0.1:{srv.port}/mcp", connect_timeout=5)
+            client.start()
+            try:
+                # Reads and closes the 202; must not raise on the empty body.
+                client.send_notification("notifications/initialized")
+            finally:
+                client.stop()
+
+    def test_the_client_never_picks_up_a_session_id(self):
+        from freecad_ai.mcp.transport import StreamableHTTPClientTransport
+
+        with _RunningServer(handler=self._mcp_handler) as srv:
+            client = StreamableHTTPClientTransport(
+                f"http://127.0.0.1:{srv.port}/mcp", connect_timeout=5)
+            client.start()
+            try:
+                client.send_request("initialize", {}, timeout=5)
+                assert client._session_id is None
+            finally:
+                client.stop()
