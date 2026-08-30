@@ -701,8 +701,11 @@ class HTTPServerTransport:
             def do_POST(self):
                 if not self._authorized():
                     return
-                if self._base_path() == "/messages":
+                path = self._base_path()
+                if path == "/messages":
                     self._handle_messages()
+                elif path == "/mcp":
+                    self._handle_streamable()
                 else:
                     self.send_error(404)
 
@@ -760,6 +763,56 @@ class HTTPServerTransport:
 
                 if response is not None:
                     transport._send_sse(response)
+
+            def _handle_streamable(self):
+                """Serve one Streamable HTTP POST.
+
+                Unlike ``/messages``, the reply travels back in this very
+                response — there is no side channel and no client to have
+                dropped, so none of the SSE bookkeeping applies.
+
+                The request/notification split is decided by ``id``, not by
+                whether the handler produced something: a request that gets no
+                response is a server bug, and answering it with a bare 202
+                would surface as an unparseable empty body on the client.
+                """
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length).decode("utf-8")
+
+                try:
+                    msg = json.loads(body)
+                except json.JSONDecodeError:
+                    self._send_json(400, protocol.make_error(
+                        None, protocol.PARSE_ERROR, "Parse error"))
+                    return
+
+                if not isinstance(msg, dict):
+                    self._send_json(400, protocol.make_error(
+                        None, protocol.INVALID_REQUEST,
+                        "Expected a single JSON-RPC object. Batched requests "
+                        "are not supported."))
+                    return
+
+                msg_id = msg.get("id")
+                try:
+                    response = transport._handler(msg) if transport._handler else None
+                except Exception as e:
+                    response = protocol.make_error(
+                        msg_id, protocol.INTERNAL_ERROR, str(e))
+
+                if msg_id is None:
+                    self.send_response(202)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+
+                if response is None:
+                    response = protocol.make_error(
+                        msg_id, protocol.INTERNAL_ERROR,
+                        "Server produced no response for method %r"
+                        % msg.get("method"))
+
+                self._send_json(200, response)
 
             def _send_json(self, code: int, msg: dict):
                 data = json.dumps(msg, separators=(",", ":")).encode()
