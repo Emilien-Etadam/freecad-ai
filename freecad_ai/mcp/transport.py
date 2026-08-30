@@ -515,6 +515,11 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 # carries, so it cannot seed the default Host allowlist (see __init__).
 _WILDCARD_BIND_HOSTS = frozenset({"0.0.0.0", "::"})
 
+# Cap the Streamable HTTP request body. A negative Content-Length would make
+# rfile.read() block to EOF and pin a worker thread until the socket timeout,
+# answering nothing; an oversized one would buffer the whole body in memory.
+MAX_REQUEST_BODY = 10 * 1024 * 1024
+
 
 class HTTPServerTransport:
     """Server-side transport: serves MCP over HTTP on one listener.
@@ -607,7 +612,10 @@ class HTTPServerTransport:
             if httpd is None:
                 raise RuntimeError("bind() must be called before serve()")
             self._serving = True
-        logger.info("MCP SSE server listening on http://%s:%d", self._host, self._port)
+        logger.info(
+            "MCP server listening on http://%s:%d/mcp (legacy HTTP+SSE also "
+            "served at http://%s:%d/sse)",
+            self._host, self._port, self._host, self._port)
         try:
             httpd.serve_forever()
         finally:
@@ -804,6 +812,13 @@ class HTTPServerTransport:
                 # we speak. A named revision we cannot serve is a 400 (spec
                 # MUST) whose body says which ones we can — a rejection the
                 # client cannot act on is how #60 read to its users.
+                #
+                # This 400 is sent without draining the request body, which is
+                # only safe because self.protocol_version stays the stdlib
+                # default "HTTP/1.0": the connection closes after this
+                # response regardless, so there is no keep-alive stream to
+                # desynchronise. If protocol_version is ever raised to
+                # "HTTP/1.1", this early return needs to drain the body first.
                 version = self.headers.get("MCP-Protocol-Version")
                 if (version is not None
                         and version not in protocol.SUPPORTED_PROTOCOL_VERSIONS):
@@ -818,6 +833,9 @@ class HTTPServerTransport:
 
                 try:
                     length = int(self.headers.get("Content-Length", 0))
+                    if length < 0 or length > MAX_REQUEST_BODY:
+                        raise ValueError(
+                            "Content-Length %d out of range" % length)
                     body = self.rfile.read(length).decode("utf-8")
                     msg = json.loads(body)
                 except (ValueError, UnicodeDecodeError):
@@ -868,6 +886,8 @@ class HTTPServerTransport:
                 self.wfile.write(data)
 
             def do_OPTIONS(self):
+                if not self._authorized():
+                    return
                 # No permissive CORS: a cross-origin preflight gets no
                 # Access-Control-Allow-Origin, so the browser blocks the
                 # follow-up request (do_POST also rejects it server-side).

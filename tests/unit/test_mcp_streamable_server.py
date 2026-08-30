@@ -13,7 +13,7 @@ import urllib.request
 import pytest
 
 from freecad_ai.mcp import protocol
-from freecad_ai.mcp.transport import HTTPServerTransport
+from freecad_ai.mcp.transport import MAX_REQUEST_BODY, HTTPServerTransport
 
 
 def _echo_handler(msg):
@@ -42,8 +42,10 @@ class _RunningServer:
         return self
 
     def __exit__(self, *exc):
-        self.httpd.shutdown()
-        self.httpd.server_close()
+        try:
+            self.httpd.shutdown()
+        finally:
+            self.httpd.server_close()
 
 
 def _request(port, path="/mcp", method="POST", data=None, headers=None):
@@ -80,9 +82,10 @@ class TestStreamableRequests:
     def test_no_session_id_is_ever_issued(self):
         """We keep no cross-request state, and 2026-07-28 removes sessions."""
         with _RunningServer() as srv:
-            _, _, headers = _post(
+            status, _, headers = _post(
                 srv.port, {"jsonrpc": "2.0", "id": 1, "method": "ping"})
 
+        assert status == 200
         assert headers.get("Mcp-Session-Id") is None
 
     def test_a_notification_is_accepted_with_no_body(self):
@@ -129,6 +132,27 @@ class TestStreamableRequests:
             status, body, _ = _post(
                 srv.port, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
                 headers={"Content-Length": "notanumber"})
+
+        assert status == 400
+        assert json.loads(body)["error"]["code"] == protocol.PARSE_ERROR
+
+    def test_a_negative_content_length_is_a_parse_error(self):
+        """A negative length would make rfile.read() block to EOF and pin a
+        worker thread until the socket timeout, answering nothing. The point
+        of this test is that a response arrives at all."""
+        with _RunningServer() as srv:
+            status, body, _ = _post(
+                srv.port, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                headers={"Content-Length": "-1"})
+
+        assert status == 400
+        assert json.loads(body)["error"]["code"] == protocol.PARSE_ERROR
+
+    def test_an_oversized_content_length_is_a_parse_error(self):
+        with _RunningServer() as srv:
+            status, body, _ = _post(
+                srv.port, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                headers={"Content-Length": str(MAX_REQUEST_BODY + 1)})
 
         assert status == 400
         assert json.loads(body)["error"]["code"] == protocol.PARSE_ERROR
