@@ -5,19 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
-### Fixed
-
-- **`MCP_HOST=0.0.0.0` locked out every client it appeared to let in** — the
-  server's `Host`-header allowlist was seeded from the bind address, so a
-  wildcard bind added the literal string `0.0.0.0` to it. No client's `Host`
-  header ever names a wildcard address, so the socket listened on every
-  interface while returning 403 to every non-loopback client — with no error
-  and no log line to say why. A wildcard bind is now refused at startup with a
-  message naming the fix, instead of failing silently later. Reported and fixed
-  by @AmirF194 in [#66](https://github.com/ghbalf/freecad-ai/pull/66),
-  closing [#60](https://github.com/ghbalf/freecad-ai/issues/60).
+## [0.23.0-alpha] - 2026-08-31
 
 ### Added
 
@@ -42,6 +30,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `*` is not accepted: the server has **no authentication**
   ([#59](https://github.com/ghbalf/freecad-ai/issues/59)), so this allowlist is
   the only thing limiting who can reach it.
+
+### Fixed
+
+- **`MCP_HOST=0.0.0.0` locked out every client it appeared to let in** — the
+  server's `Host`-header allowlist was seeded from the bind address, so a
+  wildcard bind added the literal string `0.0.0.0` to it. No client's `Host`
+  header ever names a wildcard address, so the socket listened on every
+  interface while returning 403 to every non-loopback client — with no error
+  and no log line to say why. A wildcard bind is now refused at startup with a
+  message naming the fix, instead of failing silently later. Reported and fixed
+  by @AmirF194 in [#66](https://github.com/ghbalf/freecad-ai/pull/66),
+  closing [#60](https://github.com/ghbalf/freecad-ai/issues/60).
 
 ## [0.22.0-alpha] - 2026-08-23
 
