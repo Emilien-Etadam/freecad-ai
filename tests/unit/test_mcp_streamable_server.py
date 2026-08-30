@@ -118,6 +118,28 @@ class TestStreamableRequests:
         assert status == 400
         assert json.loads(body)["error"]["code"] == protocol.INVALID_REQUEST
 
+    def test_a_non_integer_content_length_is_a_parse_error(self):
+        """int(Content-Length) must not raise ValueError past the handler.
+
+        urllib respects an explicitly-set Content-Length header rather than
+        recomputing it from the body, which is what lets this test reach the
+        server with a malformed header at all.
+        """
+        with _RunningServer() as srv:
+            status, body, _ = _post(
+                srv.port, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                headers={"Content-Length": "notanumber"})
+
+        assert status == 400
+        assert json.loads(body)["error"]["code"] == protocol.PARSE_ERROR
+
+    def test_a_non_utf8_body_is_a_parse_error(self):
+        with _RunningServer() as srv:
+            status, body, _ = _post(srv.port, b"\xff\xfe")
+
+        assert status == 400
+        assert json.loads(body)["error"]["code"] == protocol.PARSE_ERROR
+
     def test_a_request_the_handler_ignores_becomes_an_internal_error(self):
         """A request MUST get a response. A silent handler is a server bug —
         say so, rather than leaving the client to time out on an empty body."""

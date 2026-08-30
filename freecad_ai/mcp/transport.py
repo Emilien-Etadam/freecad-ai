@@ -776,12 +776,17 @@ class HTTPServerTransport:
                 response is a server bug, and answering it with a bare 202
                 would surface as an unparseable empty body on the client.
                 """
-                length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(length).decode("utf-8")
-
                 try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = self.rfile.read(length).decode("utf-8")
                     msg = json.loads(body)
-                except json.JSONDecodeError:
+                except (ValueError, UnicodeDecodeError):
+                    # ValueError covers a non-integer Content-Length and
+                    # json.JSONDecodeError (a ValueError subclass); a body
+                    # that isn't valid UTF-8 raises UnicodeDecodeError. This
+                    # endpoint is unauthenticated (#59), so any of the three
+                    # must answer with a JSON-RPC error, never an uncaught
+                    # exception reaching http.server's generic handler.
                     self._send_json(400, protocol.make_error(
                         None, protocol.PARSE_ERROR, "Parse error"))
                     return
