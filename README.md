@@ -263,14 +263,14 @@ Three ways to start it, differing in who owns the FreeCAD process:
 - **The toolbar** — no paths, no command line. In the **FreeCAD AI** workbench, click **MCP Server** on the toolbar (or the matching entry in the FreeCAD AI menu) to start the server inside the running FreeCAD; click again to stop it. The URL is printed to the Report view, and the address lives in **AI Settings → MCP Servers**. The button reflects the real server state, so a server started either of the ways below shows as running and can be stopped from it too.
 
   ```bash
-  claude mcp add --transport sse freecad http://127.0.0.1:3000/sse
+  claude mcp add --transport http freecad http://127.0.0.1:3000/mcp
   ```
 
-- **`mcp_server_http.py`** — the same HTTP/SSE server, started from the command line. FreeCAD is already running with your document open and the client attaches to it, so you watch the model change live in the viewport.
+- **`mcp_server_http.py`** — the same HTTP server, started from the command line. FreeCAD is already running with your document open and the client attaches to it, so you watch the model change live in the viewport.
 
   ```bash
   /path/to/FreeCAD.AppImage /path/to/freecad-ai/mcp_server_http.py
-  claude mcp add --transport sse freecad http://127.0.0.1:3000/sse
+  claude mcp add --transport http freecad http://127.0.0.1:3000/mcp
   ```
 
 - **`mcp_server_entry.py`** — STDIO, headless. The client spawns FreeCAD, which lives and dies with the session.

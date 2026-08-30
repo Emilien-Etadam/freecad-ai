@@ -125,7 +125,7 @@ class ServerController:
         """Start serving and return the URL.
 
         Raises OSError if the bind fails, or if ``host`` is a wildcard address
-        while ``allowed_hosts`` is None — see SSEServerTransport.
+        while ``allowed_hosts`` is None — see HTTPServerTransport.
 
         Binds *before* building the registry: the bind is the only step that
         realistically fails, it is cheap, and failing first leaves no
@@ -142,10 +142,10 @@ class ServerController:
             self._transport = None
             self._url = None
 
-        from .transport import SSEServerTransport
+        from .transport import HTTPServerTransport
 
-        transport = SSEServerTransport(host=host, port=port,
-                                       allowed_hosts=allowed_hosts)
+        transport = HTTPServerTransport(host=host, port=port,
+                                        allowed_hosts=allowed_hosts)
         transport.bind()  # raises OSError on the caller's thread — the point
 
         if self._registry is None or self._executor is None:
@@ -157,13 +157,18 @@ class ServerController:
                            executor=self._executor)
         thread = threading.Thread(
             target=self._serve, args=(server,), daemon=True,
-            name="mcp-sse-server")
+            name="mcp-http-server")
         thread.start()
 
         self._transport = transport
         self._thread = thread
-        self._url = "http://%s:%d/sse" % (host, port)
-        logger.info("MCP SSE server listening on %s", self._url)
+        # The advertised URL is the Streamable HTTP endpoint: HTTP+SSE is
+        # deprecated with a removal window (#65), so new configurations should
+        # not be pointed at it. The legacy pair keeps serving regardless.
+        self._url = "http://%s:%d/mcp" % (host, port)
+        logger.info(
+            "MCP server listening on %s (legacy HTTP+SSE also served at "
+            "http://%s:%d/sse)", self._url, host, port)
         return self._url
 
     def _serve(self, server):
@@ -172,7 +177,7 @@ class ServerController:
         try:
             server.run()
         except Exception:
-            logger.exception("MCP SSE server stopped unexpectedly")
+            logger.exception("MCP server stopped unexpectedly")
 
     def stop(self):
         """Shut the server down and release the port. Idempotent."""

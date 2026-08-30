@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Streamable HTTP transport for the MCP server** — the server now answers
+  `POST /mcp` with the JSON-RPC reply inline, alongside the existing
+  `GET /sse` + `POST /messages` pair, on the same address and port. Clients
+  connect with whichever transport they speak and nothing needs reconfiguring.
+  HTTP+SSE was deprecated in the `2026-07-28` protocol revision with a
+  twelve-month removal window, so the URL the toolbar and
+  `mcp_server_http.py` report is now `http://host:port/mcp`; existing `/sse`
+  configurations keep working. No session ids are issued and `GET /mcp`
+  answers `405`, which is what the newer revisions expect anyway.
+  ([#65](https://github.com/ghbalf/freecad-ai/issues/65))
+
 - **Allowed `Host` headers are configurable** — a new
   **AI Settings → MCP Servers → Allowed Host headers** field and a
   `MCP_ALLOWED_HOSTS` environment variable (comma-separated, env wins) name the

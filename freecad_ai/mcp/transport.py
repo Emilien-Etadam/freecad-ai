@@ -2,7 +2,7 @@
 
 StdioClientTransport — manages a subprocess MCP server (client side).
 StdioServerTransport — reads stdin / writes stdout (server side).
-SSEServerTransport  — serves MCP over HTTP with Server-Sent Events.
+HTTPServerTransport — serves MCP over HTTP: Streamable HTTP and HTTP+SSE.
 """
 
 import json
@@ -515,13 +515,26 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 # carries, so it cannot seed the default Host allowlist (see __init__).
 _WILDCARD_BIND_HOSTS = frozenset({"0.0.0.0", "::"})
 
+# Cap the Streamable HTTP request body. A negative Content-Length would make
+# rfile.read() block to EOF and pin a worker thread until the socket timeout,
+# answering nothing; an oversized one would buffer the whole body in memory.
+MAX_REQUEST_BODY = 10 * 1024 * 1024
 
-class SSEServerTransport:
-    """Server-side transport: serves MCP over HTTP + Server-Sent Events.
+
+class HTTPServerTransport:
+    """Server-side transport: serves MCP over HTTP on one listener.
 
     Endpoints:
-        GET  /sse       — SSE event stream (client subscribes here)
-        POST /messages  — JSON-RPC requests (responses arrive via SSE)
+        POST /mcp       — Streamable HTTP; the JSON-RPC reply comes back
+                          inline as application/json
+        GET  /mcp       — 405; this server offers no server-to-client stream
+        GET  /sse       — legacy HTTP+SSE event stream (client subscribes here)
+        POST /messages  — legacy HTTP+SSE requests (responses arrive via SSE)
+
+    Both transports run side by side so a client connects with whichever it
+    speaks. HTTP+SSE was deprecated in 2026-07-28 with a minimum twelve-month
+    removal window (#65); the spec's own guidance for servers is to host both
+    during it.
 
     Designed for a single connected client at a time (typical for a
     desktop-app MCP server like FreeCAD).
@@ -599,7 +612,10 @@ class SSEServerTransport:
             if httpd is None:
                 raise RuntimeError("bind() must be called before serve()")
             self._serving = True
-        logger.info("MCP SSE server listening on http://%s:%d", self._host, self._port)
+        logger.info(
+            "MCP server listening on http://%s:%d/mcp (legacy HTTP+SSE also "
+            "served at http://%s:%d/sse)",
+            self._host, self._port, self._host, self._port)
         try:
             httpd.serve_forever()
         finally:
@@ -685,16 +701,43 @@ class SSEServerTransport:
             def do_GET(self):
                 if not self._authorized():
                     return
-                if self._base_path() == "/sse":
+                path = self._base_path()
+                if path == "/sse":
                     self._handle_sse()
+                elif path == "/mcp":
+                    # The spec allows a server that offers no server-to-client
+                    # stream to refuse GET outright, and we originate no
+                    # server-initiated messages.
+                    self._send_method_not_allowed()
                 else:
                     self.send_error(404)
+
+            def do_DELETE(self):
+                # _authorized() is invoked per-verb by hand — BaseHTTPRequest-
+                # Handler has no dispatch layer to hook — so a new verb that
+                # forgets this call silently bypasses the Host/Origin guard.
+                if not self._authorized():
+                    return
+                if self._base_path() == "/mcp":
+                    # DELETE terminates a session. We issue none.
+                    self._send_method_not_allowed()
+                else:
+                    self.send_error(404)
+
+            def _send_method_not_allowed(self):
+                self.send_response(405)
+                self.send_header("Allow", "POST")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
 
             def do_POST(self):
                 if not self._authorized():
                     return
-                if self._base_path() == "/messages":
+                path = self._base_path()
+                if path == "/messages":
                     self._handle_messages()
+                elif path == "/mcp":
+                    self._handle_streamable()
                 else:
                     self.send_error(404)
 
@@ -753,6 +796,87 @@ class SSEServerTransport:
                 if response is not None:
                     transport._send_sse(response)
 
+            def _handle_streamable(self):
+                """Serve one Streamable HTTP POST.
+
+                Unlike ``/messages``, the reply travels back in this very
+                response — there is no side channel and no client to have
+                dropped, so none of the SSE bookkeeping applies.
+
+                The request/notification split is decided by ``id``, not by
+                whether the handler produced something: a request that gets no
+                response is a server bug, and answering it with a bare 202
+                would surface as an unparseable empty body on the client.
+                """
+                # Absent means "assume 2025-03-26" (spec SHOULD), which is what
+                # we speak. A named revision we cannot serve is a 400 (spec
+                # MUST) whose body says which ones we can — a rejection the
+                # client cannot act on is how #60 read to its users.
+                #
+                # This 400 is sent without draining the request body, which is
+                # only safe because self.protocol_version stays the stdlib
+                # default "HTTP/1.0": the connection closes after this
+                # response regardless, so there is no keep-alive stream to
+                # desynchronise. If protocol_version is ever raised to
+                # "HTTP/1.1", this early return needs to drain the body first.
+                version = self.headers.get("MCP-Protocol-Version")
+                if (version is not None
+                        and version not in protocol.SUPPORTED_PROTOCOL_VERSIONS):
+                    self._send_json(400, protocol.make_error(
+                        None, protocol.INVALID_REQUEST,
+                        "Unsupported MCP-Protocol-Version %r. This server "
+                        "speaks %s." % (
+                            version,
+                            ", ".join(sorted(
+                                protocol.SUPPORTED_PROTOCOL_VERSIONS)))))
+                    return
+
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    if length < 0 or length > MAX_REQUEST_BODY:
+                        raise ValueError(
+                            "Content-Length %d out of range" % length)
+                    body = self.rfile.read(length).decode("utf-8")
+                    msg = json.loads(body)
+                except (ValueError, UnicodeDecodeError):
+                    # ValueError covers a non-integer Content-Length and
+                    # json.JSONDecodeError (a ValueError subclass); a body
+                    # that isn't valid UTF-8 raises UnicodeDecodeError. This
+                    # endpoint is unauthenticated (#59), so any of the three
+                    # must answer with a JSON-RPC error, never an uncaught
+                    # exception reaching http.server's generic handler.
+                    self._send_json(400, protocol.make_error(
+                        None, protocol.PARSE_ERROR, "Parse error"))
+                    return
+
+                if not isinstance(msg, dict):
+                    self._send_json(400, protocol.make_error(
+                        None, protocol.INVALID_REQUEST,
+                        "Expected a single JSON-RPC object. Batched requests "
+                        "are not supported."))
+                    return
+
+                msg_id = msg.get("id")
+                try:
+                    response = transport._handler(msg) if transport._handler else None
+                except Exception as e:
+                    response = protocol.make_error(
+                        msg_id, protocol.INTERNAL_ERROR, str(e))
+
+                if msg_id is None:
+                    self.send_response(202)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+
+                if response is None:
+                    response = protocol.make_error(
+                        msg_id, protocol.INTERNAL_ERROR,
+                        "Server produced no response for method %r"
+                        % msg.get("method"))
+
+                self._send_json(200, response)
+
             def _send_json(self, code: int, msg: dict):
                 data = json.dumps(msg, separators=(",", ":")).encode()
                 self.send_response(code)
@@ -762,6 +886,8 @@ class SSEServerTransport:
                 self.wfile.write(data)
 
             def do_OPTIONS(self):
+                if not self._authorized():
+                    return
                 # No permissive CORS: a cross-origin preflight gets no
                 # Access-Control-Allow-Origin, so the browser blocks the
                 # follow-up request (do_POST also rejects it server-side).
@@ -799,3 +925,9 @@ class SSEServerTransport:
             except (BrokenPipeError, ConnectionResetError, OSError):
                 self._sse_wfile = None
                 return False
+
+
+# The class was SSE-only until #65 added the Streamable HTTP route. The old
+# name stays bound to it permanently: mcp_server_entry.py, the wiki and user
+# scripts all import it, and nothing is gained by breaking them.
+SSEServerTransport = HTTPServerTransport

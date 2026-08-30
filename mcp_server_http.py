@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""MCP server entry point for FreeCAD AI (HTTP/SSE mode).
+"""MCP server entry point for FreeCAD AI (HTTP mode).
 
 Starts FreeCAD with GUI and exposes all built-in tools via the MCP
-protocol over HTTP + Server-Sent Events, so you can watch FreeCAD
-update in real-time while an AI client calls tools.
+protocol over HTTP — Streamable HTTP at /mcp and the legacy HTTP+SSE
+pair — so you can watch FreeCAD update in real-time while an AI client
+calls tools.
 
 Usage:
     # Start FreeCAD with this script as an argument:
@@ -12,13 +13,17 @@ Usage:
     # Or from inside a running FreeCAD via macro / exec:
     exec(open("/path/to/freecad-ai/mcp_server_http.py").read())
 
-MCP configuration:
+MCP configuration (Streamable HTTP — preferred):
 {
     "freecad": {
-      "type": "remote",
-      "url": "http://127.0.0.1:3000/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp"
     }
 }
+
+The legacy HTTP+SSE endpoint stays available at http://127.0.0.1:3000/sse for
+clients that only speak it. That transport was deprecated in the 2026-07-28
+protocol revision with a removal window, so prefer /mcp for new configurations.
 
 Environment variables:
     MCP_HOST  — listen address  (default: 127.0.0.1)
@@ -71,4 +76,4 @@ allowed_hosts = resolve_allowed_hosts(_cfg)
 # server that never came up.
 url = get_server_controller().start(host, port, allowed_hosts=allowed_hosts)
 
-print(f"MCP SSE server running on {url}", flush=True)
+print(f"MCP server running on {url}", flush=True)

@@ -175,7 +175,7 @@ def test_start_reports_running_and_returns_the_url():
     port = _free_port()
     try:
         url = controller.start("127.0.0.1", port)
-        assert url == "http://127.0.0.1:%d/sse" % port
+        assert url == "http://127.0.0.1:%d/mcp" % port
         assert controller.is_running() is True
         assert controller.url == url
     finally:
@@ -281,6 +281,19 @@ def test_start_reaps_the_socket_a_dead_serve_thread_left_open():
         assert controller.is_running() is True
         with socket.create_connection(("127.0.0.1", port), timeout=2):
             pass  # and the new server really owns the port
+    finally:
+        controller.stop()
+
+
+def test_the_advertised_url_is_the_streamable_endpoint():
+    """The toolbar writes this string to the Report view, so it is the URL
+    users copy into a client config. Point it at the transport that is not
+    on a removal clock; /sse keeps serving for anyone already on it."""
+    controller = _controller()
+    port = _free_port()
+    try:
+        url = controller.start("127.0.0.1", port)
+        assert url.endswith("/mcp")
     finally:
         controller.stop()
 
