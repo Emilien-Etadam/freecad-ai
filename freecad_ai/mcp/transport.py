@@ -800,6 +800,22 @@ class HTTPServerTransport:
                 response is a server bug, and answering it with a bare 202
                 would surface as an unparseable empty body on the client.
                 """
+                # Absent means "assume 2025-03-26" (spec SHOULD), which is what
+                # we speak. A named revision we cannot serve is a 400 (spec
+                # MUST) whose body says which ones we can — a rejection the
+                # client cannot act on is how #60 read to its users.
+                version = self.headers.get("MCP-Protocol-Version")
+                if (version is not None
+                        and version not in protocol.SUPPORTED_PROTOCOL_VERSIONS):
+                    self._send_json(400, protocol.make_error(
+                        None, protocol.INVALID_REQUEST,
+                        "Unsupported MCP-Protocol-Version %r. This server "
+                        "speaks %s." % (
+                            version,
+                            ", ".join(sorted(
+                                protocol.SUPPORTED_PROTOCOL_VERSIONS)))))
+                    return
+
                 try:
                     length = int(self.headers.get("Content-Length", 0))
                     body = self.rfile.read(length).decode("utf-8")

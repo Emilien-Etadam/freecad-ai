@@ -237,3 +237,62 @@ class TestStreamableMethods:
                 headers={"Content-Type": "application/json"})
 
         assert status == 202
+
+
+class TestProtocolVersionHeader:
+    _PING = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+
+    def test_a_missing_header_is_assumed_to_be_the_default_revision(self):
+        """Spec SHOULD: absent header means 2025-03-26, which is what we speak."""
+        with _RunningServer() as srv:
+            status, _, _ = _post(srv.port, self._PING)
+
+        assert status == 200
+
+    @pytest.mark.parametrize("version",
+                             ["2025-03-26", "2025-06-18", "2025-11-25"])
+    def test_every_revision_we_can_serve_is_accepted(self, version):
+        with _RunningServer() as srv:
+            status, _, _ = _post(srv.port, self._PING,
+                                 headers={"MCP-Protocol-Version": version})
+
+        assert status == 200
+
+    def test_the_2026_redesign_is_rejected(self):
+        with _RunningServer() as srv:
+            status, body, _ = _post(
+                srv.port, self._PING,
+                headers={"MCP-Protocol-Version": "2026-07-28"})
+
+        assert status == 400
+        assert json.loads(body)["error"]["code"] == protocol.INVALID_REQUEST
+
+    def test_a_garbage_version_is_rejected(self):
+        with _RunningServer() as srv:
+            status, _, _ = _post(
+                srv.port, self._PING,
+                headers={"MCP-Protocol-Version": "banana"})
+
+        assert status == 400
+
+    def test_the_rejection_names_what_we_support(self):
+        """A 400 a client cannot act on is the #60 failure mode again."""
+        with _RunningServer() as srv:
+            _, body, _ = _post(
+                srv.port, self._PING,
+                headers={"MCP-Protocol-Version": "2026-07-28"})
+
+        message = json.loads(body)["error"]["message"]
+        for version in protocol.SUPPORTED_PROTOCOL_VERSIONS:
+            assert version in message
+
+    def test_the_legacy_messages_path_ignores_the_header(self):
+        """Changing /messages would break clients this work is not about."""
+        with _RunningServer() as srv:
+            status, _, _ = _request(
+                srv.port, path="/messages",
+                data=json.dumps(self._PING).encode(),
+                headers={"Content-Type": "application/json",
+                         "MCP-Protocol-Version": "2026-07-28"})
+
+        assert status == 202
