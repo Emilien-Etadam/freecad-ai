@@ -177,7 +177,7 @@ class ServerController:
         try:
             server.run()
         except Exception:
-            logger.exception("MCP SSE server stopped unexpectedly")
+            logger.exception("MCP server stopped unexpectedly")
 
     def stop(self):
         """Shut the server down and release the port. Idempotent."""
