@@ -138,3 +138,40 @@ def test_toggling_keep_dock_pushes_the_new_state(initgui, ticks, tmp_config_dir)
 
     assert cfg.keep_dock_on_workbench_switch is False
     assert ticks["FreeCADAI_ToggleKeepDock"] is False
+
+
+# ---------------------------------------------------------------------------
+# A rejected allowed-hosts list must fail the click, not the session
+# ---------------------------------------------------------------------------
+
+def test_toggle_reports_a_rejected_allowed_hosts_list(initgui, ticks,
+                                                      monkeypatch):
+    """MCP_ALLOWED_HOSTS="*" is refused by resolve_allowed_hosts.
+
+    That raises ValueError, not the OSError the bind path raises, so without
+    handling it the toggle propagates out of Activated() into FreeCAD's
+    command dispatcher — a console traceback and a button left mid-state.
+
+    The rejection must also happen before any bind is attempted, so this
+    never depends on a port being free.
+    """
+    monkeypatch.setenv("MCP_ALLOWED_HOSTS", "*")
+
+    import freecad_ai.mcp.gui_server as gui_server
+
+    def _must_not_bind(self, *args, **kwargs):
+        raise AssertionError("start() ran despite a rejected allowlist")
+
+    monkeypatch.setattr(gui_server.ServerController, "start", _must_not_bind)
+
+    command = initgui["ToggleMCPServerCommand"]()
+    reported = []
+    monkeypatch.setattr(type(command), "_report_failure",
+                        lambda self, host, port, exc: reported.append(exc))
+
+    command.Activated()
+
+    assert len(reported) == 1
+    assert isinstance(reported[0], ValueError)
+    assert "*" in str(reported[0])
+    assert ticks["FreeCADAI_ToggleMCPServer"] is False

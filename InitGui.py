@@ -224,7 +224,8 @@ class ToggleMCPServerCommand:
 
     def Activated(self, index=0):
         from freecad_ai.mcp.gui_server import (
-            get_server_controller, resolve_server_address)
+            get_server_controller, resolve_allowed_hosts,
+            resolve_server_address)
         controller = get_server_controller()
 
         if controller.is_running():
@@ -234,10 +235,16 @@ class ToggleMCPServerCommand:
             return
 
         from freecad_ai.config import get_config
-        host, port = resolve_server_address(get_config())
+        cfg = get_config()
+        host, port = resolve_server_address(cfg)
         try:
-            url = controller.start(host, port)
-        except OSError as exc:
+            # ValueError as well as OSError: resolve_allowed_hosts refuses a
+            # "*" entry, and MCP_ALLOWED_HOSTS can carry one even though the
+            # Settings dialog strips it. Unhandled, that leaves the button
+            # mid-state behind a console traceback nothing surfaces.
+            allowed_hosts = resolve_allowed_hosts(cfg)
+            url = controller.start(host, port, allowed_hosts=allowed_hosts)
+        except (OSError, ValueError) as exc:
             self._report_failure(host, port, exc)
             self._sync_action()  # a failed start must leave the button unticked
             return

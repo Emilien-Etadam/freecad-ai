@@ -1235,3 +1235,13 @@ def test_mcp_server_address_roundtrip():
     restored = AppConfig.from_dict(cfg.to_dict())
     assert restored.mcp_server_host == "0.0.0.0"
     assert restored.mcp_server_port == 8080
+
+
+def test_mcp_server_allowed_hosts_defaults_to_empty():
+    """Empty means "let the transport pick", which is today's behaviour.
+
+    A non-empty default would be handed to SSEServerTransport as an explicit
+    allowlist, skipping the branch that rejects a wildcard bind (#60/#66).
+    """
+    from freecad_ai.config import AppConfig
+    assert AppConfig().mcp_server_allowed_hosts == []

@@ -16,6 +16,7 @@ from freecad_ai.mcp.gui_server import (
     DEFAULT_PORT,
     ServerController,
     get_server_controller,
+    resolve_allowed_hosts,
     resolve_server_address,
 )
 
@@ -84,6 +85,87 @@ def test_resolve_ignores_a_non_numeric_env_port(monkeypatch):
     monkeypatch.setenv("MCP_PORT", "not-a-port")
     cfg = type("Cfg", (), {"mcp_server_host": "10.0.0.5", "mcp_server_port": 9000})()
     assert resolve_server_address(cfg) == ("10.0.0.5", 9000)
+
+
+# --- allowed-host resolution -----------------------------------------------
+#
+# Nothing configured must resolve to None, not to the loopback list. The
+# transport's own ``allowed_hosts is None`` branch is what rejects a wildcard
+# bind; handing it an explicit list — even the identical one — bypasses that
+# guard and silently restores the every-client-gets-403 dead end of #60.
+
+def test_allowed_hosts_is_none_when_nothing_is_configured(monkeypatch):
+    monkeypatch.delenv("MCP_ALLOWED_HOSTS", raising=False)
+    assert resolve_allowed_hosts(None) is None
+
+
+def test_allowed_hosts_is_none_when_the_config_list_is_empty(monkeypatch):
+    monkeypatch.delenv("MCP_ALLOWED_HOSTS", raising=False)
+    cfg = type("Cfg", (), {"mcp_server_allowed_hosts": []})()
+    assert resolve_allowed_hosts(cfg) is None
+
+
+def test_allowed_hosts_prefers_config_over_default(monkeypatch):
+    monkeypatch.delenv("MCP_ALLOWED_HOSTS", raising=False)
+    cfg = type("Cfg", (), {
+        "mcp_server_allowed_hosts": ["fileserver.local", "192.168.1.50"]})()
+    assert resolve_allowed_hosts(cfg) == ["fileserver.local", "192.168.1.50"]
+
+
+def test_allowed_hosts_prefers_env_over_config(monkeypatch):
+    monkeypatch.setenv("MCP_ALLOWED_HOSTS", "box.lan, 10.0.0.7")
+    cfg = type("Cfg", (), {"mcp_server_allowed_hosts": ["ignored.local"]})()
+    assert resolve_allowed_hosts(cfg) == ["box.lan", "10.0.0.7"]
+
+
+def test_allowed_hosts_drops_blank_entries(monkeypatch):
+    monkeypatch.setenv("MCP_ALLOWED_HOSTS", "box.lan, ,, 10.0.0.7,")
+    assert resolve_allowed_hosts(None) == ["box.lan", "10.0.0.7"]
+
+
+def test_allowed_hosts_rejects_a_wildcard_entry(monkeypatch):
+    # "*" would re-open exactly the hole #60 declined to open: the Host
+    # allowlist is the only thing standing between a wildcard bind and
+    # unauthenticated remote tool execution until #59 lands a token.
+    monkeypatch.setenv("MCP_ALLOWED_HOSTS", "box.lan, *")
+    with pytest.raises(ValueError, match=r"\*"):
+        resolve_allowed_hosts(None)
+
+
+def test_allowed_hosts_rejects_a_wildcard_entry_from_config(monkeypatch):
+    monkeypatch.delenv("MCP_ALLOWED_HOSTS", raising=False)
+    cfg = type("Cfg", (), {"mcp_server_allowed_hosts": ["*"]})()
+    with pytest.raises(ValueError, match=r"\*"):
+        resolve_allowed_hosts(cfg)
+
+
+# --- allowed hosts reach the transport -------------------------------------
+
+def test_explicit_allowed_hosts_admit_a_non_loopback_client():
+    # The escape hatch #66's own error message advertises: naming the host
+    # clients actually dial makes a non-loopback bind usable.
+    controller = _controller()
+    port = _free_port()
+    try:
+        controller.start("127.0.0.1", port,
+                         allowed_hosts=["fileserver.local"])
+        transport = controller._transport
+        assert transport._request_allowed("fileserver.local:%d" % port,
+                                          None) is True
+    finally:
+        controller.stop()
+
+
+def test_start_without_allowed_hosts_keeps_the_loopback_default():
+    controller = _controller()
+    port = _free_port()
+    try:
+        controller.start("127.0.0.1", port)
+        transport = controller._transport
+        assert transport._request_allowed("evil.example:%d" % port,
+                                          None) is False
+    finally:
+        controller.stop()
 
 
 # --- lifecycle -------------------------------------------------------------

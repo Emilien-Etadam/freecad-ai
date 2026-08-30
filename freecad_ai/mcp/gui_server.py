@@ -49,6 +49,43 @@ def resolve_server_address(cfg=None):
     return host, port
 
 
+def resolve_allowed_hosts(cfg=None):
+    """Return the ``Host``-header allowlist, or ``None`` for the default.
+
+    ``None`` is not the same as the loopback list. The transport derives its
+    own default only when ``allowed_hosts is None``, and that branch is where
+    a wildcard bind is rejected. Passing an explicit list — even one identical
+    to the default — is the documented opt-in to a wider policy, so returning
+    a list when the user configured nothing would silently disarm that guard
+    and restore #60's every-client-gets-403 dead end.
+
+    Env beats config, matching MCP_HOST / MCP_PORT. Entries are comma
+    separated.
+
+    Raises ValueError on a ``*`` entry: the allowlist is the only thing
+    standing between a wildcard bind and unauthenticated remote tool
+    execution until #59 lands a bearer token, so widening it to "any Host"
+    is refused rather than quietly honoured.
+    """
+    raw = os.environ.get("MCP_ALLOWED_HOSTS")
+    if raw:
+        hosts = raw.split(",")
+    elif cfg is not None:
+        hosts = list(getattr(cfg, "mcp_server_allowed_hosts", None) or [])
+    else:
+        hosts = []
+
+    hosts = [h.strip() for h in hosts if h and h.strip()]
+    if any(h == "*" for h in hosts):
+        raise ValueError(
+            "'*' is not accepted in the MCP allowed-hosts list. The server "
+            "has no authentication (issue #59), and this allowlist is the "
+            "only thing keeping a wildcard bind from serving arbitrary "
+            "Python to anything that can reach it. Name the concrete hosts "
+            "clients dial instead.")
+    return hosts or None
+
+
 def _default_backend():
     """Build the tool registry and the Qt main-thread executor.
 
@@ -84,8 +121,11 @@ class ServerController:
     def url(self):
         return self._url if self.is_running() else None
 
-    def start(self, host, port):
-        """Start serving and return the URL. Raises OSError if the bind fails.
+    def start(self, host, port, allowed_hosts=None):
+        """Start serving and return the URL.
+
+        Raises OSError if the bind fails, or if ``host`` is a wildcard address
+        while ``allowed_hosts`` is None — see SSEServerTransport.
 
         Binds *before* building the registry: the bind is the only step that
         realistically fails, it is cheap, and failing first leaves no
@@ -104,7 +144,8 @@ class ServerController:
 
         from .transport import SSEServerTransport
 
-        transport = SSEServerTransport(host=host, port=port)
+        transport = SSEServerTransport(host=host, port=port,
+                                       allowed_hosts=allowed_hosts)
         transport.bind()  # raises OSError on the caller's thread — the point
 
         if self._registry is None or self._executor is None:
