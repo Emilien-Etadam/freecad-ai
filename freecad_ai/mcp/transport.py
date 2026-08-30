@@ -2,7 +2,7 @@
 
 StdioClientTransport — manages a subprocess MCP server (client side).
 StdioServerTransport — reads stdin / writes stdout (server side).
-SSEServerTransport  — serves MCP over HTTP with Server-Sent Events.
+HTTPServerTransport — serves MCP over HTTP: Streamable HTTP and HTTP+SSE.
 """
 
 import json
@@ -516,12 +516,20 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _WILDCARD_BIND_HOSTS = frozenset({"0.0.0.0", "::"})
 
 
-class SSEServerTransport:
-    """Server-side transport: serves MCP over HTTP + Server-Sent Events.
+class HTTPServerTransport:
+    """Server-side transport: serves MCP over HTTP on one listener.
 
     Endpoints:
-        GET  /sse       — SSE event stream (client subscribes here)
-        POST /messages  — JSON-RPC requests (responses arrive via SSE)
+        POST /mcp       — Streamable HTTP; the JSON-RPC reply comes back
+                          inline as application/json
+        GET  /mcp       — 405; this server offers no server-to-client stream
+        GET  /sse       — legacy HTTP+SSE event stream (client subscribes here)
+        POST /messages  — legacy HTTP+SSE requests (responses arrive via SSE)
+
+    Both transports run side by side so a client connects with whichever it
+    speaks. HTTP+SSE was deprecated in 2026-07-28 with a minimum twelve-month
+    removal window (#65); the spec's own guidance for servers is to host both
+    during it.
 
     Designed for a single connected client at a time (typical for a
     desktop-app MCP server like FreeCAD).
@@ -799,3 +807,9 @@ class SSEServerTransport:
             except (BrokenPipeError, ConnectionResetError, OSError):
                 self._sse_wfile = None
                 return False
+
+
+# The class was SSE-only until #65 added the Streamable HTTP route. The old
+# name stays bound to it permanently: mcp_server_entry.py, the wiki and user
+# scripts all import it, and nothing is gained by breaking them.
+SSEServerTransport = HTTPServerTransport

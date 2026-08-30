@@ -452,3 +452,13 @@ def test_write_locked_drops_the_client_on_timeout():
     # The lock must be free afterwards, or stop() would still block on it.
     assert transport._sse_lock.acquire(blocking=False)
     transport._sse_lock.release()
+
+
+def test_sse_server_transport_is_an_alias_of_http_server_transport():
+    """The class serves /mcp too now, but the old name must keep importing.
+
+    mcp_server_entry.py, the wiki and user scripts all name SSEServerTransport.
+    """
+    from freecad_ai.mcp.transport import HTTPServerTransport, SSEServerTransport
+
+    assert SSEServerTransport is HTTPServerTransport
