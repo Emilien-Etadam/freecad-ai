@@ -352,7 +352,7 @@ class TestClientServerRoundTrip:
             finally:
                 client.stop()
 
-    def test_a_notification_round_trips_without_a_body(self):
+    def test_a_notification_does_not_raise(self):
         from freecad_ai.mcp.transport import StreamableHTTPClientTransport
 
         with _RunningServer(handler=self._mcp_handler) as srv:
@@ -373,7 +373,10 @@ class TestClientServerRoundTrip:
                 f"http://127.0.0.1:{srv.port}/mcp", connect_timeout=5)
             client.start()
             try:
-                client.send_request("initialize", {}, timeout=5)
+                resp = client.send_request("initialize", {}, timeout=5)
+                # The server answered (has a result, not an error).
+                assert "result" in resp
+                # The Streamable HTTP server issues no session ID; it stays None.
                 assert client._session_id is None
             finally:
                 client.stop()
