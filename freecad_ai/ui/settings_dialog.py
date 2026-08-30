@@ -691,6 +691,17 @@ class SettingsDialog(QDialog):
             translate("SettingsDialog", "Server port:"),
             self.mcp_server_port_edit)
 
+        # Host headers the server answers to. Empty means the transport's own
+        # loopback default, which is also what keeps a wildcard bind refused
+        # rather than silently 403-ing every client (#60). Naming hosts here
+        # is the opt-in that makes a non-loopback bind reachable.
+        self.mcp_server_allowed_hosts_edit = QLineEdit()
+        self.mcp_server_allowed_hosts_edit.setPlaceholderText(
+            "127.0.0.1, localhost, ::1")
+        server_form.addRow(
+            translate("SettingsDialog", "Allowed Host headers:"),
+            self.mcp_server_allowed_hosts_edit)
+
         mcp_layout.addLayout(server_form)
 
         # Unconditional, not shown only for non-loopback values: the loopback
@@ -700,7 +711,12 @@ class SettingsDialog(QDialog):
             "SettingsDialog",
             "The MCP server has no authentication. Anything that can reach "
             "this address can run FreeCAD tools, including arbitrary Python. "
-            "Keep it on 127.0.0.1 unless you understand the exposure."))
+            "Keep it on 127.0.0.1 unless you understand the exposure.\n\n"
+            "Leave Allowed Host headers empty for loopback-only access. "
+            "Listing hosts is what makes a non-loopback bind reachable, so "
+            "name only the addresses clients actually dial. \"*\" is not "
+            "accepted \u2014 with no authentication, this list is the only "
+            "thing limiting who can reach the server."))
         mcp_server_warning.setWordWrap(True)
         mcp_layout.addWidget(mcp_server_warning)
 
@@ -935,6 +951,8 @@ class SettingsDialog(QDialog):
 
         self.mcp_server_host_edit.setText(cfg.mcp_server_host)
         self.mcp_server_port_edit.setText(str(cfg.mcp_server_port))
+        self.mcp_server_allowed_hosts_edit.setText(
+            ", ".join(cfg.mcp_server_allowed_hosts or []))
 
         # Editor preference
         self.use_external_editor_cb.setChecked(cfg.use_external_editor)
@@ -1206,6 +1224,8 @@ class SettingsDialog(QDialog):
         cfg.mcp_server_host, cfg.mcp_server_port = self._parse_server_address(
             self.mcp_server_host_edit.text(),
             self.mcp_server_port_edit.text())
+        cfg.mcp_server_allowed_hosts = self._parse_allowed_hosts(
+            self.mcp_server_allowed_hosts_edit.text())
         cfg.use_external_editor = self.use_external_editor_cb.isChecked()
         cfg.scan_freecad_macros = self.scan_macros_cb.isChecked()
 
@@ -1558,6 +1578,21 @@ class SettingsDialog(QDialog):
             args = " ".join(entry.get("args", []))
             target = f"{entry.get('command', '')} {args}".strip()
         return f"{prefix}{entry.get('name', '?')} — {target}"
+
+    @staticmethod
+    def _parse_allowed_hosts(hosts_text):
+        """Normalise the allowed-Host-headers field into a list.
+
+        Empty means "let the transport pick its own default" — loopback, and
+        with it the wildcard-bind rejection that keeps #60 from returning.
+
+        A "*" entry is dropped rather than raised on, because the dialog must
+        always be closable. The warning under the field is what explains why;
+        the env-var path (resolve_allowed_hosts) refuses it loudly instead,
+        since a traceback is the only feedback available there.
+        """
+        return [h.strip() for h in (hosts_text or "").split(",")
+                if h.strip() and h.strip() != "*"]
 
     @staticmethod
     def _parse_server_address(host_text, port_text):

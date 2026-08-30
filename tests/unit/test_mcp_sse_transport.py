@@ -144,6 +144,22 @@ def test_request_allows_explicitly_configured_bind_host():
     assert transport._request_allowed("192.168.1.5:3000", None) is True
 
 
+@pytest.mark.parametrize("wildcard_host", ["0.0.0.0", "::"])
+def test_wildcard_bind_host_rejected_instead_of_locking_out_every_client(
+        wildcard_host):
+    # A wildcard bind address is not a name any real client's Host header
+    # ever carries, so seeding the default allowlist from it locks out every
+    # LAN client instead of the loopback-only client it was meant to guard.
+    with pytest.raises(OSError, match="MCP_HOST"):
+        SSEServerTransport(host=wildcard_host)
+
+
+def test_wildcard_bind_host_allowed_with_explicit_allowed_hosts():
+    transport = SSEServerTransport(
+        host="0.0.0.0", allowed_hosts=["fileserver.local"])
+    assert transport._request_allowed("fileserver.local:3000", None) is True
+
+
 def test_cross_origin_post_rejected_and_no_wildcard_cors_header():
     transport = SSEServerTransport(host="127.0.0.1", port=0)
     transport._handler = lambda msg: {
@@ -334,21 +350,56 @@ def test_http_entry_point_delegates_to_the_shared_controller(monkeypatch):
     started = []
 
     class _FakeController:
-        def start(self, host, port):
-            started.append((host, port))
+        def start(self, host, port, allowed_hosts=None):
+            started.append((host, port, allowed_hosts))
             return "http://%s:%d/sse" % (host, port)
 
     import freecad_ai.mcp.gui_server as gui_server
     monkeypatch.setattr(gui_server, "get_server_controller",
                         lambda: _FakeController())
 
-    # Pin both so the assertion cannot depend on the developer's config.json.
+    # Pin all three so the assertion cannot depend on the developer's
+    # config.json or environment.
     monkeypatch.setenv("MCP_HOST", "127.0.0.1")
     monkeypatch.setenv("MCP_PORT", "3131")
+    monkeypatch.delenv("MCP_ALLOWED_HOSTS", raising=False)
 
     exec(compile(source, "mcp_server_http.py", "exec"), {})
 
-    assert started == [("127.0.0.1", 3131)]
+    # allowed_hosts stays None with nothing configured, so the transport keeps
+    # deriving its own default — and with it the wildcard-bind rejection.
+    assert started == [("127.0.0.1", 3131, None)]
+
+
+def test_http_entry_point_forwards_the_allowed_hosts_env_var(monkeypatch):
+    """MCP_ALLOWED_HOSTS must reach the transport, not just parse cleanly."""
+    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    source = (repo_root / "mcp_server_http.py").read_text()
+
+    fake_freecad = types.ModuleType("FreeCAD")
+    fake_freecad.ActiveDocument = object()
+    fake_freecad.newDocument = lambda name: None
+    monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
+
+    started = []
+
+    class _FakeController:
+        def start(self, host, port, allowed_hosts=None):
+            started.append((host, port, allowed_hosts))
+            return "http://%s:%d/sse" % (host, port)
+
+    import freecad_ai.mcp.gui_server as gui_server
+    monkeypatch.setattr(gui_server, "get_server_controller",
+                        lambda: _FakeController())
+
+    monkeypatch.setenv("MCP_HOST", "192.168.1.50")
+    monkeypatch.setenv("MCP_PORT", "3131")
+    monkeypatch.setenv("MCP_ALLOWED_HOSTS", "fileserver.local, 192.168.1.50")
+
+    exec(compile(source, "mcp_server_http.py", "exec"), {})
+
+    assert started == [("192.168.1.50", 3131,
+                        ["fileserver.local", "192.168.1.50"])]
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`MCP_HOST=0.0.0.0` locked out every client it appeared to let in** — the
+  server's `Host`-header allowlist was seeded from the bind address, so a
+  wildcard bind added the literal string `0.0.0.0` to it. No client's `Host`
+  header ever names a wildcard address, so the socket listened on every
+  interface while returning 403 to every non-loopback client — with no error
+  and no log line to say why. A wildcard bind is now refused at startup with a
+  message naming the fix, instead of failing silently later. Reported and fixed
+  by @AmirF194 in [#66](https://github.com/ghbalf/freecad-ai/pull/66),
+  closing [#60](https://github.com/ghbalf/freecad-ai/issues/60).
+
+### Added
+
+- **Allowed `Host` headers are configurable** — a new
+  **AI Settings → MCP Servers → Allowed Host headers** field and a
+  `MCP_ALLOWED_HOSTS` environment variable (comma-separated, env wins) name the
+  hosts the MCP server answers to. This is what makes a non-loopback bind
+  usable: clients send the address they dialled, so it has to be named here.
+  Empty (the default) keeps today's behaviour exactly — loopback only, and a
+  wildcard bind still refused.
+  `*` is not accepted: the server has **no authentication**
+  ([#59](https://github.com/ghbalf/freecad-ai/issues/59)), so this allowlist is
+  the only thing limiting who can reach it.
+
 ## [0.22.0-alpha] - 2026-08-23
 
 ### Added

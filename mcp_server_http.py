@@ -23,6 +23,11 @@ MCP configuration:
 Environment variables:
     MCP_HOST  — listen address  (default: 127.0.0.1)
     MCP_PORT  — listen port     (default: 3000)
+    MCP_ALLOWED_HOSTS — comma-separated Host headers the server answers to
+                        (default: loopback only). Needed when binding a
+                        non-loopback address: clients send the address they
+                        dialled, so it must be named here. "*" is refused —
+                        the server has no authentication.
 """
 
 import os
@@ -45,7 +50,11 @@ import FreeCAD
 if not FreeCAD.ActiveDocument:
     FreeCAD.newDocument("Unnamed")
 
-from freecad_ai.mcp.gui_server import get_server_controller, resolve_server_address
+from freecad_ai.mcp.gui_server import (
+    get_server_controller,
+    resolve_allowed_hosts,
+    resolve_server_address,
+)
 
 # Config is only a fallback here; MCP_HOST / MCP_PORT still win. Reading it
 # can fail outside a configured install, which must not stop the server.
@@ -56,9 +65,10 @@ except Exception:
     _cfg = None
 
 host, port = resolve_server_address(_cfg)
+allowed_hosts = resolve_allowed_hosts(_cfg)
 
 # start() binds before returning, so this line can no longer announce a
 # server that never came up.
-url = get_server_controller().start(host, port)
+url = get_server_controller().start(host, port, allowed_hosts=allowed_hosts)
 
 print(f"MCP SSE server running on {url}", flush=True)
