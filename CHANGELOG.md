@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The MCP client now sends `MCP-Protocol-Version` on every request after the
+  handshake** — required of clients since the `2025-06-18` protocol revision and
+  omitted since the client was written. It worked only by coincidence: a server
+  seeing no header is told to assume `2025-03-26`, which is what we speak. A
+  server that has dropped that revision was entitled to reject every call after
+  `initialize`. The header carries the version the *server* chose during the
+  handshake, not the one we asked with, so a server negotiating a newer revision
+  is now answered correctly. Affects both HTTP client transports; STDIO has no
+  headers and is unchanged.
+  ([#64](https://github.com/ghbalf/freecad-ai/issues/64))
+
 ## [0.23.0-alpha] - 2026-08-31
 
 ### Added

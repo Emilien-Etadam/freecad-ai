@@ -263,6 +263,9 @@ class SSEClientTransport:
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
         self._correlator = _RequestCorrelator()
+        # Negotiated MCP revision, latched by MCPClient after initialize. A
+        # client MUST send it on every later request as of 2025-06-18.
+        self.protocol_version = None
         self._resp = None
         self._reader_thread = None
         self._endpoint_url = None
@@ -348,6 +351,8 @@ class SSEClientTransport:
         for key, value in self._headers.items():
             req.add_header(key, value)
         req.add_header("Content-Type", "application/json")
+        if self.protocol_version:
+            req.add_header("MCP-Protocol-Version", self.protocol_version)
         resp = urllib.request.urlopen(
             req, timeout=self._connect_timeout, context=self._ssl_context)
         resp.read()   # drain the 202 body
@@ -385,6 +390,9 @@ class StreamableHTTPClientTransport:
         self._ssl_context = ssl_context
         self._connect_timeout = connect_timeout
         self._session_id = None
+        # Negotiated MCP revision, latched by MCPClient after initialize. A
+        # client MUST send it on every later request as of 2025-06-18.
+        self.protocol_version = None
         self._next_id = 1
         self._id_lock = threading.Lock()
         self._running = False
@@ -455,6 +463,8 @@ class StreamableHTTPClientTransport:
         req.add_header("Accept", "application/json, text/event-stream")
         if self._session_id:
             req.add_header("Mcp-Session-Id", self._session_id)
+        if self.protocol_version:
+            req.add_header("MCP-Protocol-Version", self.protocol_version)
         return urllib.request.urlopen(
             req, timeout=timeout, context=self._ssl_context)
 
