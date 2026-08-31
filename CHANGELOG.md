@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.23.1-alpha] - 2026-08-31
+
 ### Fixed
 
 - **The legacy `POST /messages` endpoint no longer answers `500` to malformed
