@@ -84,6 +84,14 @@ class MCPClient:
                 f"MCP server '{self.name}' initialization failed: {resp['error']}"
             )
 
+        # Latch the negotiated revision before anything else goes out. The
+        # server's choice wins over what we asked for; HTTP transports send it
+        # as MCP-Protocol-Version on every later request (a client MUST as of
+        # 2025-06-18). Stdio has no headers and simply ignores it.
+        self._transport.protocol_version = (
+            resp.get("result", {}).get("protocolVersion") or PROTOCOL_VERSION
+        )
+
         # Send initialized notification
         self._transport.send_notification("notifications/initialized")
 
