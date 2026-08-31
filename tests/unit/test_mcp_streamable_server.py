@@ -60,12 +60,12 @@ def _request(port, path="/mcp", method="POST", data=None, headers=None):
         return exc.code, exc.read(), exc.headers
 
 
-def _post(port, payload, headers=None):
-    """POST a JSON-RPC message to /mcp. ``payload`` is encoded verbatim if bytes."""
+def _post(port, payload, headers=None, path="/mcp"):
+    """POST a JSON-RPC message. ``payload`` is encoded verbatim if bytes."""
     body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
     hdrs = {"Content-Type": "application/json"}
     hdrs.update(headers or {})
-    return _request(port, data=body, headers=hdrs)
+    return _request(port, path=path, data=body, headers=hdrs)
 
 
 class TestStreamableRequests:
@@ -404,3 +404,71 @@ class TestClientServerRoundTrip:
                 assert client._session_id is None
             finally:
                 client.stop()
+
+
+class TestLegacyMessagesParsing:
+    """The same malformed input the /mcp route rejects cleanly (#69).
+
+    /messages parsed Content-Length and decoded the body outside its try, and
+    caught only JSONDecodeError — so a bad header or a non-UTF-8 body escaped
+    as a 500 with a traceback in the user's FreeCAD console, and a negative
+    length pinned a worker thread reading to EOF with no answer at all. #65
+    fixed this for /mcp only, under a constraint not to touch legacy
+    behaviour; this is the legacy side getting the same treatment.
+    """
+
+    def test_a_valid_message_still_gets_the_legacy_202(self):
+        """Control: the success path must be untouched by the error-path fix."""
+        with _RunningServer() as srv:
+            status, body, _ = _post(
+                srv.port, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                path="/messages")
+
+        assert status == 202
+        assert json.loads(body) == {"accepted": True}
+
+    def test_a_non_integer_content_length_is_a_parse_error(self):
+        with _RunningServer() as srv:
+            status, body, _ = _post(
+                srv.port, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                headers={"Content-Length": "notanumber"}, path="/messages")
+
+        assert status == 400
+        assert json.loads(body)["error"]["code"] == protocol.PARSE_ERROR
+
+    def test_a_negative_content_length_is_a_parse_error(self):
+        """rfile.read(-1) would block to EOF and answer nothing. The point of
+        this test is that a response arrives at all."""
+        with _RunningServer() as srv:
+            status, body, _ = _post(
+                srv.port, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                headers={"Content-Length": "-1"}, path="/messages")
+
+        assert status == 400
+        assert json.loads(body)["error"]["code"] == protocol.PARSE_ERROR
+
+    def test_an_oversized_content_length_is_a_parse_error(self):
+        with _RunningServer() as srv:
+            status, body, _ = _post(
+                srv.port, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                headers={"Content-Length": str(MAX_REQUEST_BODY + 1)},
+                path="/messages")
+
+        assert status == 400
+        assert json.loads(body)["error"]["code"] == protocol.PARSE_ERROR
+
+    def test_a_non_utf8_body_is_a_parse_error(self):
+        with _RunningServer() as srv:
+            status, body, _ = _post(srv.port, b"\xff\xfe", path="/messages")
+
+        assert status == 400
+        assert json.loads(body)["error"]["code"] == protocol.PARSE_ERROR
+
+    def test_unparseable_json_is_still_a_parse_error(self):
+        """Pre-existing behaviour: JSONDecodeError is a ValueError subclass,
+        so broadening the except must not change this case."""
+        with _RunningServer() as srv:
+            status, body, _ = _post(srv.port, b"{not json", path="/messages")
+
+        assert status == 400
+        assert json.loads(body)["error"]["code"] == protocol.PARSE_ERROR

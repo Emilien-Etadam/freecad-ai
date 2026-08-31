@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The legacy `POST /messages` endpoint no longer answers `500` to malformed
+  input** — it parsed `Content-Length` and decoded the body without guarding
+  either, so a non-integer header or a body that was not valid UTF-8 escaped as
+  an uncaught exception: the client got a `500` and the user got a traceback in
+  the FreeCAD console. A negative `Content-Length` was worse — it made the read
+  block to end-of-stream, pinning a worker thread until the socket timed out
+  without answering at all. All three now return `400` with JSON-RPC `-32700`,
+  matching what the `/mcp` route has done since v0.23.0-alpha. The success path
+  is unchanged.
+  ([#69](https://github.com/ghbalf/freecad-ai/issues/69))
+
 - **The MCP client now sends `MCP-Protocol-Version` on every request after the
   handshake** — required of clients since the `2025-06-18` protocol revision and
   omitted since the client was written. It worked only by coincidence: a server
