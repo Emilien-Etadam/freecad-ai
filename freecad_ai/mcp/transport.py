@@ -777,12 +777,25 @@ class HTTPServerTransport:
                             transport._sse_wfile = None
 
             def _handle_messages(self):
-                length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(length).decode("utf-8")
-
+                # Same guard as _handle_streamable, for the same reason (#69):
+                # this endpoint is unauthenticated (#59), so a malformed
+                # header or body must answer with a JSON-RPC error rather
+                # than escape as a traceback in the user's FreeCAD console.
+                # ValueError covers a non-integer Content-Length and
+                # json.JSONDecodeError (a ValueError subclass, so the
+                # pre-existing parse-error behaviour is unchanged); a body
+                # that isn't valid UTF-8 raises UnicodeDecodeError. The range
+                # check matters most: rfile.read(-1) would block to EOF and
+                # pin a worker thread until the socket timeout, answering
+                # nothing at all.
                 try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    if length < 0 or length > MAX_REQUEST_BODY:
+                        raise ValueError(
+                            "Content-Length %d out of range" % length)
+                    body = self.rfile.read(length).decode("utf-8")
                     msg = json.loads(body)
-                except json.JSONDecodeError:
+                except (ValueError, UnicodeDecodeError):
                     err = protocol.make_error(
                         None, protocol.PARSE_ERROR, "Parse error"
                     )
