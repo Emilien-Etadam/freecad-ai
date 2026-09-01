@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 ### Fixed
 
 - **Code calling tool names as Python functions is rejected with the reason** (`freecad_ai/core/executor.py`). In Act mode a model may answer a modelling request with a ```python block calling `create_body(label="Die")` / `create_primitive(…)` — those are tools, not functions in FreeCAD's interpreter, so the code cannot run. It used to fail several steps later on an unrelated error (on a fresh session, "No active document"), and the retry loop burned its attempts on the wrong problem. The executor now names the mistake before running anything: which tool names were called, and that real tool calls are what's needed. Method calls (`doc.undo()`) are not flagged.
@@ -62,6 +63,192 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Image thumbnail dialog crashed on unqualified Qt names** (`freecad_ai/ui/chat_dock/display.py`). `_show_image_dialog` referenced `QVBoxLayout` and `QLabel` without importing them, raising `NameError` when clicking a chat image thumbnail; both now go through `QtWidgets`.
 
 - **Send appeared to do nothing after clicking the button** (`freecad_ai/ui/chat_dock/send.py`). MCP connection and LLM tool reranking ran on the main thread *before* the loading indicator appeared, freezing the UI for up to two minutes with no feedback. Loading/stream UI now shows immediately; setup errors are surfaced in chat and the Report View. The reranker LLM client uses a 30 s HTTP timeout so a dead provider falls back to keyword reranking quickly.
+=======
+## [0.23.1-alpha] - 2026-08-31
+
+### Fixed
+
+- **The legacy `POST /messages` endpoint no longer answers `500` to malformed
+  input** — it parsed `Content-Length` and decoded the body without guarding
+  either, so a non-integer header or a body that was not valid UTF-8 escaped as
+  an uncaught exception: the client got a `500` and the user got a traceback in
+  the FreeCAD console. A negative `Content-Length` was worse — it made the read
+  block to end-of-stream, pinning a worker thread until the socket timed out
+  without answering at all. All three now return `400` with JSON-RPC `-32700`,
+  matching what the `/mcp` route has done since v0.23.0-alpha. The success path
+  is unchanged.
+  ([#69](https://github.com/ghbalf/freecad-ai/issues/69))
+
+- **The MCP client now sends `MCP-Protocol-Version` on every request after the
+  handshake** — required of clients since the `2025-06-18` protocol revision and
+  omitted since the client was written. It worked only by coincidence: a server
+  seeing no header is told to assume `2025-03-26`, which is what we speak. A
+  server that has dropped that revision was entitled to reject every call after
+  `initialize`. The header carries the version the *server* chose during the
+  handshake, not the one we asked with, so a server negotiating a newer revision
+  is now answered correctly. Affects both HTTP client transports; STDIO has no
+  headers and is unchanged.
+  ([#64](https://github.com/ghbalf/freecad-ai/issues/64))
+
+## [0.23.0-alpha] - 2026-08-31
+
+### Added
+
+- **Streamable HTTP transport for the MCP server** — the server now answers
+  `POST /mcp` with the JSON-RPC reply inline, alongside the existing
+  `GET /sse` + `POST /messages` pair, on the same address and port. Clients
+  connect with whichever transport they speak and nothing needs reconfiguring.
+  HTTP+SSE was deprecated in the `2026-07-28` protocol revision with a
+  twelve-month removal window, so the URL the toolbar and
+  `mcp_server_http.py` report is now `http://host:port/mcp`; existing `/sse`
+  configurations keep working. No session ids are issued and `GET /mcp`
+  answers `405`, which is what the newer revisions expect anyway.
+  ([#65](https://github.com/ghbalf/freecad-ai/issues/65))
+
+- **Allowed `Host` headers are configurable** — a new
+  **AI Settings → MCP Servers → Allowed Host headers** field and a
+  `MCP_ALLOWED_HOSTS` environment variable (comma-separated, env wins) name the
+  hosts the MCP server answers to. This is what makes a non-loopback bind
+  usable: clients send the address they dialled, so it has to be named here.
+  Empty (the default) keeps today's behaviour exactly — loopback only, and a
+  wildcard bind still refused.
+  `*` is not accepted: the server has **no authentication**
+  ([#59](https://github.com/ghbalf/freecad-ai/issues/59)), so this allowlist is
+  the only thing limiting who can reach it.
+
+### Fixed
+
+- **`MCP_HOST=0.0.0.0` locked out every client it appeared to let in** — the
+  server's `Host`-header allowlist was seeded from the bind address, so a
+  wildcard bind added the literal string `0.0.0.0` to it. No client's `Host`
+  header ever names a wildcard address, so the socket listened on every
+  interface while returning 403 to every non-loopback client — with no error
+  and no log line to say why. A wildcard bind is now refused at startup with a
+  message naming the fix, instead of failing silently later. Reported and fixed
+  by @AmirF194 in [#66](https://github.com/ghbalf/freecad-ai/pull/66),
+  closing [#60](https://github.com/ghbalf/freecad-ai/issues/60).
+
+## [0.22.0-alpha] - 2026-08-23
+
+### Added
+
+- **Start and stop the MCP server from the toolbar** — a checkable **MCP Server**
+  command in the FreeCAD AI toolbar and menu starts the HTTP/SSE server in the
+  running FreeCAD, so external clients no longer need a command-line launch or a
+  pasted `exec(open(...))` snippet. Suggested by @s-light on
+  [#55](https://github.com/ghbalf/freecad-ai/issues/55).
+  The button reports the true state: a server started via
+  `FreeCAD.AppImage mcp_server_http.py` or from the Python console shows as
+  running and can be stopped from the button, because all three routes now share
+  one controller.
+  Host and port are configurable under **AI Settings → MCP Servers**, with
+  `MCP_HOST`/`MCP_PORT` still taking precedence. Note the server has **no
+  authentication** — see [#59](https://github.com/ghbalf/freecad-ai/issues/59).
+
+### Fixed
+
+- **A failed MCP server start was silent** — the listening socket was created
+  inside the server thread, so a port conflict raised `OSError` in a daemon
+  thread and vanished: no dialog, no log the user would see, FreeCAD carrying on
+  as though the server were up. `mcp_server_http.py` compounded it by printing
+  `MCP SSE server running on ...` *before* attempting the bind. The bind now
+  happens before anything is announced, and failures reach the caller.
+- **The MCP server could not be stopped** — `SSEServerTransport` never kept a
+  handle on its HTTP server, so the only way to stop it was to quit FreeCAD. It
+  now has a `stop()` that shuts down and releases the port.
+- **MCP server reported a stale version to every client** — `SERVER_INFO` in
+  `freecad_ai/mcp/server.py` hardcoded `"0.1.0"`, so `claude mcp list`, Claude
+  Desktop and any other client displayed "FreeCAD AI 0.1.0" no matter which
+  release was installed. It now derives from `freecad_ai.__version__`. Cosmetic,
+  but actively misleading when diagnosing someone else's setup — and the value
+  had been wrong for twenty releases. Found while verifying the external-client
+  docs for #55; `MCPServer` had no test coverage at all, which is why nobody
+  caught it.
+- **"Keep Chat Panel Open" always showed a checkmark** — the menu entry's tick
+  was pinned on from the moment the workbench loaded and never moved, whatever
+  the setting actually was. FreeCAD 1.1.x reads a command's `Checkable`
+  resource as the action's *initial* state rather than as "this action may be
+  checked", and never calls a Python command's `IsChecked()`, so the tick has
+  to be pushed by hand. It now is — from the command itself, from workbench
+  activation, and from the Settings dialog.
+  [#62](https://github.com/ghbalf/freecad-ai/issues/62)
+- **A stuck MCP client could freeze FreeCAD** — SSE writes are serialized under
+  a lock that `stop()` also needs, and the connection had no timeout, so a
+  client that stopped reading could block the write indefinitely and hang the
+  Stop button on the Qt main thread. The connection now times out, which drops
+  the wedged client instead of freezing the GUI.
+  [#63](https://github.com/ghbalf/freecad-ai/issues/63)
+
+## [0.21.2-alpha] - 2026-08-15
+
+### Fixed
+
+- **`list_documents` raised AttributeError on every FreeCAD 1.1.x session**
+  (#57, reported and fixed by @s-light in #56) — the handler read
+  `doc.Modified`, but `App.Document` has no such property; the dirty flag lives
+  on the *Gui* document. The tool failed for all users on 1.1.x, not just the
+  Flatpak build it was reported against — confirmed locally against 1.1.1
+  (AppImage). The flag now comes from `Gui.getDocument(name).Modified`, falling
+  back to `False` when there is no GUI (the STDIO MCP server entry point runs
+  headless) or when the document is unknown to the Gui layer.
+- **Sandbox pre-check picked the wrong FreeCAD install** (#58, by @s-light) —
+  `_find_freecad_cmd()` guessed from `~/bin` AppImages and `PATH`, which could
+  resolve to a completely unrelated install (a Snap package on `PATH` while the
+  live session runs from a Flatpak). That foreign binary loads its own
+  incompatible Draft/Arch/PySide stack and segfaults. The console binary is now
+  resolved from the running session's own `FreeCAD.getHomePath()` first, which
+  is guaranteed to match; the existing AppImage/`PATH` chain remains as a
+  fallback for builds that ship no `freecadcmd`.
+- **Sandbox segfaulted on any code importing Arch/BIM** (#58, by @s-light) —
+  the harness imported the real `FreeCADGui` and then patched `ActiveDocument`
+  to a no-op. But the crash happens *during* the import: the real module pulls
+  in PySide/Qt, and anything that later touches Arch dies in C++ where no
+  Python handler can catch it — there is no display and no `QApplication` event
+  loop. The harness now installs a fake `FreeCADGui` module into `sys.modules`
+  instead, so the real one is never imported. Same view-cosmetics
+  neutralisation as before (#14), without the crash. Note that the fake module
+  defines only `ActiveDocument`, `SendMsgToActiveView` and `updateGui`; the
+  no-op absorption applies *below* `Gui.ActiveDocument`, not to the module
+  itself. Any other `Gui` attribute — notably `Gui.Selection` and
+  `Gui.getDocument`, which the real module provides — now raises
+  `AttributeError` in the pre-check, so code that reads the selection fails the
+  pre-check while running fine live.
+
+## [0.21.1-alpha] - 2026-08-05
+
+### Fixed
+
+- **Plan-mode Execute button missing on long plans** (#50, reported by
+  @MusaAkyuz) — a plan that hit the `max_tokens` output limit was cut off
+  mid-code-block, so the closing ``` fence never arrived. Both fence regexes
+  require it, so the script rendered as unformatted prose and no Execute/Copy
+  buttons were emitted. The button was never generated — nothing was scrolled
+  off-screen. A truncated block now renders as a proper code block and gets a
+  **Copy** button; **Execute is withheld**, since running a script cut off
+  mid-expression raises a `SyntaxError` or leaves half-built geometry.
+- **Truncated responses are now flagged** (#50) — `finish_reason="length"`
+  (OpenAI-style) and `stop_reason="max_tokens"` (Anthropic) were both discarded,
+  so a plan simply stopped mid-line with no explanation. The chat now shows a
+  warning naming the current Max Output Tokens value and pointing at Settings.
+- **`` ```py `` and untagged code blocks now get an Execute button** (#50) — the
+  executor matched only `` ```python `` while the renderer styled any fence, so
+  models that tag fences differently produced a code block with no way to run it.
+  Non-Python fences (`` ```bash ``, `` ```json ``) remain non-executable.
+- **Act mode no longer acts on a truncated turn** (#52) — the tool-carrying
+  request paths discarded the same truncation signal #50 fixed for Plan mode,
+  collapsing `finish_reason="length"` into a normal finish. The agentic loop
+  could not tell a cut-off turn from a completed one, so it executed tool calls
+  parsed from a half-formed payload and let the model build on its own
+  mid-sentence output. The loop now **halts** on truncation without running that
+  turn's tool calls, and shows the truncation warning. A truncated turn still
+  counts against the max tool-call iteration budget — it consumed a real
+  request, and refunding it would let repeated truncations run past the limit.
+- **Streaming tool calls are no longer silently dropped on truncation** (#52) —
+  when an OpenAI-style stream ended with `finish_reason="length"`, the handler
+  matched only `"tool_calls"`/`"stop"`, so it never emitted the pending tool
+  calls *or* a `done` event. Those calls are now deliberately discarded (their
+  arguments JSON stops mid-object) and the turn ends cleanly.
+>>>>>>> upstream/master
 
 ## [0.21.0-alpha] - 2026-07-27
 

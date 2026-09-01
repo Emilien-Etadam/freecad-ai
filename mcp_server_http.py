@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""MCP server entry point for FreeCAD AI (HTTP/SSE mode).
+"""MCP server entry point for FreeCAD AI (HTTP mode).
 
 Starts FreeCAD with GUI and exposes all built-in tools via the MCP
-protocol over HTTP + Server-Sent Events, so you can watch FreeCAD
-update in real-time while an AI client calls tools.
+protocol over HTTP — Streamable HTTP at /mcp and the legacy HTTP+SSE
+pair — so you can watch FreeCAD update in real-time while an AI client
+calls tools.
 
 Usage:
     # Start FreeCAD with this script as an argument:
@@ -12,23 +13,31 @@ Usage:
     # Or from inside a running FreeCAD via macro / exec:
     exec(open("/path/to/freecad-ai/mcp_server_http.py").read())
 
-MCP configuration:
+MCP configuration (Streamable HTTP — preferred):
 {
     "freecad": {
-      "type": "remote",
-      "url": "http://127.0.0.1:3000/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp"
     }
 }
+
+The legacy HTTP+SSE endpoint stays available at http://127.0.0.1:3000/sse for
+clients that only speak it. That transport was deprecated in the 2026-07-28
+protocol revision with a removal window, so prefer /mcp for new configurations.
 
 Environment variables:
     MCP_HOST  — listen address  (default: 127.0.0.1)
     MCP_PORT  — listen port     (default: 3000)
+    MCP_ALLOWED_HOSTS — comma-separated Host headers the server answers to
+                        (default: loopback only). Needed when binding a
+                        non-loopback address: clients send the address they
+                        dialled, so it must be named here. "*" is refused —
+                        the server has no authentication.
 """
 
 import os
 import sys
 import logging
-import threading
 
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 
@@ -46,23 +55,25 @@ import FreeCAD
 if not FreeCAD.ActiveDocument:
     FreeCAD.newDocument("Unnamed")
 
-from freecad_ai.tools.setup import create_default_registry
-from freecad_ai.tools.executor_utils import QtMainThreadToolExecutor
-from freecad_ai.mcp.server import MCPServer
-from freecad_ai.mcp.transport import SSEServerTransport
+from freecad_ai.mcp.gui_server import (
+    get_server_controller,
+    resolve_allowed_hosts,
+    resolve_server_address,
+)
 
-registry = create_default_registry(include_mcp=False)
+# Config is only a fallback here; MCP_HOST / MCP_PORT still win. Reading it
+# can fail outside a configured install, which must not stop the server.
+try:
+    from freecad_ai.config import get_config
+    _cfg = get_config()
+except Exception:
+    _cfg = None
 
-executor = QtMainThreadToolExecutor()
-executor.set_registry(registry)
+host, port = resolve_server_address(_cfg)
+allowed_hosts = resolve_allowed_hosts(_cfg)
 
-host = os.environ.get("MCP_HOST", "127.0.0.1")
-port = int(os.environ.get("MCP_PORT", "3000"))
+# start() binds before returning, so this line can no longer announce a
+# server that never came up.
+url = get_server_controller().start(host, port, allowed_hosts=allowed_hosts)
 
-transport = SSEServerTransport(host=host, port=port)
-server = MCPServer(registry, transport=transport, executor=executor)
-
-server_thread = threading.Thread(target=server.run, daemon=True)
-server_thread.start()
-
-print(f"MCP SSE server running on http://{host}:{port}/sse", flush=True)
+print(f"MCP server running on {url}", flush=True)

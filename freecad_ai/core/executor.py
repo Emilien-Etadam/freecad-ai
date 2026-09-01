@@ -32,36 +32,49 @@ class ExecutionResult:
     code: str
 
 
-# Regex to extract ```python ... ``` code blocks
-CODE_BLOCK_RE = re.compile(
-    r"```(?:python|py)\s*\r?\n(.*?)```",
-    re.DOTALL | re.IGNORECASE,
-)
-_GENERIC_FENCE_RE = re.compile(r"```\s*\r?\n(.*?)```", re.DOTALL)
+# Fence tags we treat as executable Python. Deliberately narrow: this text is
+# handed to exec(), so ```bash / ```json must never match. A bare ``` counts,
+# since models routinely omit the tag (issue #50).
+PYTHON_FENCE_TAGS = ("python", "py", "python3", "")
+
+# Regex to extract ```<tag> ... ``` code blocks. Tag is filtered afterwards.
+CODE_BLOCK_RE = re.compile(r"```(\w*)[ \t]*\n(.*?)```", re.DOTALL)
+
+# A fence opened but never closed — the response was cut off mid-block
+# (typically at max_tokens). Anchored to the end of the text.
+TRUNCATED_BLOCK_RE = re.compile(r"```(\w*)[ \t]*\n((?:(?!```).)*)\Z", re.DOTALL)
+
+
+def _is_python_fence(tag: str) -> bool:
+    return tag.lower() in PYTHON_FENCE_TAGS
 
 
 def extract_code_blocks(text: str) -> list[str]:
-    """Extract all Python code blocks from markdown-formatted text."""
-    blocks = CODE_BLOCK_RE.findall(text)
-    if blocks:
-        return [b for b in blocks if b.strip()]
-    py_like = []
-    for block in _GENERIC_FENCE_RE.findall(text):
-        snippet = block.strip()
-        if not snippet:
-            continue
-        head = snippet[:400].lower()
-        if any(
-            k in head
-            for k in (
-                "import freecad",
-                "import part",
-                "freecad as app",
-                "app.activedocument",
-            )
-        ):
-            py_like.append(block)
-    return py_like
+    """Extract all complete Python code blocks from markdown-formatted text.
+
+    Only closed blocks are returned — a block cut off mid-expression must never
+    reach exec(). Use :func:`extract_truncated_block` to recover those for display.
+    """
+    return [code for tag, code in CODE_BLOCK_RE.findall(text)
+            if _is_python_fence(tag) and code.strip()]
+
+
+def extract_truncated_block(text: str) -> str | None:
+    """Return the body of a trailing unterminated code fence, if any.
+
+    A plan that hits ``max_tokens`` ends mid-code-block with no closing fence, so
+    the normal extractor finds nothing and the user is left with an unusable wall
+    of text (issue #50). This recovers the partial script so it can still be
+    rendered and copied — never executed.
+    """
+    # Strip complete blocks first so their content can't be mistaken for an
+    # unterminated one, then look for a fence opening in what remains.
+    remainder = CODE_BLOCK_RE.sub("", text)
+    match = TRUNCATED_BLOCK_RE.search(remainder)
+    if not match or not _is_python_fence(match.group(1)):
+        return None
+    code = match.group(2)
+    return code if code.strip() else None
 
 
 def _find_freecad_cmd() -> str:
@@ -70,6 +83,24 @@ def _find_freecad_cmd() -> str:
     Handles AppImages, wrapper scripts, and standard installs.
     """
     import glob
+
+    # 0. Ask the running FreeCAD for its own install directory and use the
+    # console binary that ships next to it. A PATH-based guess can resolve to
+    # a completely unrelated FreeCAD install (e.g. a Snap package sitting on
+    # PATH while the live session runs from a Flatpak) — that binary imports
+    # its own, incompatible Draft/Arch/PySide stack and segfaults on import,
+    # permanently blocking the sandbox pre-check for anything Arch-related.
+    # The home path is guaranteed to match the live session exactly.
+    try:
+        import FreeCAD as _App
+        home = _App.getHomePath()
+        if home:
+            for name in ("freecadcmd", "FreeCADCmd", "freecadcmd.exe", "FreeCADCmd.exe"):
+                candidate = os.path.join(home, "bin", name)
+                if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                    return candidate
+    except Exception:
+        pass
 
     # 1. Look for AppImages in ~/bin (preferred — direct binary, not a wrapper script)
     appimage_patterns = [
@@ -236,28 +267,27 @@ try:
     except Exception:
         pass
 
-    try:
-        import FreeCADGui as Gui
-        # Console mode: Gui module exists but has no active document/view.
-        # LLM-generated code routinely ends with view-framing cosmetics
-        # (Gui.ActiveDocument.ActiveView.viewIsometric(), fitAll(),
-        # SendMsgToActiveView("ViewFit")). Headlessly FreeCADGui has no
-        # ActiveDocument, so these raise AttributeError and fail the pre-check
-        # for geometry that runs fine in the user's real GUI. Neutralize the
-        # whole Gui.ActiveDocument.* surface with a recursive no-op — any
-        # attribute access or call returns the same stub, so arbitrary view
-        # chains become harmless while the geometry is still validated (#14).
-        if not hasattr(Gui, "ActiveDocument") or Gui.ActiveDocument is None:
-            class _NoOpGui:
-                def __getattr__(self, _name):
-                    return self
-                def __call__(self, *a, **kw):
-                    return self
-            Gui.ActiveDocument = _NoOpGui()
-            Gui.SendMsgToActiveView = lambda *a, **kw: None
-            Gui.updateGui = lambda *a, **kw: None
-    except ImportError:
-        pass
+    # Console mode: install a fake FreeCADGui module instead of importing the
+    # real one. LLM-generated code routinely ends with view-framing cosmetics
+    # (Gui.ActiveDocument.ActiveView.viewIsometric(), fitAll(),
+    # SendMsgToActiveView("ViewFit")); a real headless FreeCADGui has no
+    # ActiveDocument, so these raise AttributeError and fail the pre-check for
+    # geometry that runs fine in the user's real GUI (#14). A plain no-op stub
+    # covers that. Importing the *real* FreeCADGui and then anything that
+    # touches Arch/Draft (which pull in PySide) segfaults this console
+    # binary — no display, no QApplication event loop — so the real module
+    # must never be imported here at all, not just patched afterward.
+    import types
+    class _NoOpGui:
+        def __getattr__(self, _name):
+            return self
+        def __call__(self, *a, **kw):
+            return self
+    _fake_gui = types.ModuleType("FreeCADGui")
+    _fake_gui.ActiveDocument = _NoOpGui()
+    _fake_gui.SendMsgToActiveView = lambda *a, **kw: None
+    _fake_gui.updateGui = lambda *a, **kw: None
+    sys.modules["FreeCADGui"] = _fake_gui
 {open_block}
 
     # Per-object problem snapshot — shared by the baseline (pre-code) and the

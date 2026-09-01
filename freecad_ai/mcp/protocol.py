@@ -14,6 +14,23 @@ METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
+# The revision we advertise from initialize, and the one a client is told to
+# assume when it sends no MCP-Protocol-Version header.
+DEFAULT_PROTOCOL_VERSION = "2025-03-26"
+
+# Revisions the Streamable HTTP endpoint accepts in MCP-Protocol-Version.
+# Wider than what initialize advertises on purpose: our whole wire surface
+# (initialize, tools/list, tools/call, ping) is identical across these three,
+# because 2025-06-18 and 2025-11-25 only add optional fields we neither emit
+# nor require. Rejecting a client for naming one of them would be a 400 it
+# could not act on. 2026-07-28 is excluded deliberately — it is a redesign,
+# and accepting it would promise behaviour we do not have (#64).
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({
+    "2025-03-26",
+    "2025-06-18",
+    "2025-11-25",
+})
+
 
 def encode(msg: dict) -> bytes:
     """Serialize a JSON-RPC message to bytes (JSON + newline)."""

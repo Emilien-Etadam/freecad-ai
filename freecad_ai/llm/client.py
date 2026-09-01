@@ -150,6 +150,10 @@ class LLMClient:
         self.http_timeout = http_timeout
         self.api_style = get_api_style(provider_name)
 
+        # Set when the last stream ended because it hit the output-token limit
+        # rather than finishing. Read by the UI to warn the user (issue #50).
+        self.response_truncated = False
+
         # SSL context for HTTPS requests.
         # Snap-packaged FreeCAD may lack the _ssl C extension, in which
         # case we fall back to no certificate verification.  The connection
@@ -225,6 +229,7 @@ class LLMClient:
 
     def stream(self, messages: list[dict], system: str = "") -> Generator[str, None, None]:
         """Send a streaming request. Yields text deltas as they arrive."""
+        self.response_truncated = False  # never carry a stale warning into a new turn
         if self.api_style == "anthropic":
             yield from self._stream_anthropic(messages, system)
         else:
@@ -233,6 +238,7 @@ class LLMClient:
     def send_with_tools(self, messages: list[dict], system: str = "",
                         tools: list[dict] | None = None) -> LLMResponse:
         """Send a non-streaming request with tool definitions. Returns full response."""
+        self.response_truncated = False  # never carry a stale warning into a new turn
         if self.api_style == "anthropic":
             return self._send_anthropic_tools(messages, system, tools)
         else:
@@ -241,6 +247,7 @@ class LLMClient:
     def stream_with_tools(self, messages: list[dict], system: str = "",
                           tools: list[dict] | None = None) -> Generator[LLMStreamEvent, None, None]:
         """Send a streaming request with tool definitions. Yields LLMStreamEvents."""
+        self.response_truncated = False  # never carry a stale warning into a new turn
         if self.api_style == "anthropic":
             yield from self._stream_anthropic_tools(messages, system, tools)
         else:
@@ -461,6 +468,9 @@ class LLMClient:
                     arguments=args,
                 ))
 
+            if finish == "length":
+                self.response_truncated = True
+
             stop_reason = "tool_use" if (finish == "tool_calls" or tool_calls) else "end_turn"
             return LLMResponse(text=text, tool_calls=tool_calls, stop_reason=stop_reason)
         except (KeyError, IndexError, json.JSONDecodeError) as e:
@@ -477,6 +487,8 @@ class LLMClient:
                     content = delta.get("content")
                     if content:
                         yield content
+                    if choices[0].get("finish_reason") == "length":
+                        self.response_truncated = True
                     # Skip reasoning_content in simple stream mode
             except (KeyError, IndexError):
                 continue
@@ -532,6 +544,17 @@ class LLMClient:
                     if arg_chunk:
                         pt["arguments_json"] += arg_chunk
                         yield LLMStreamEvent(type="tool_call_delta", argument_delta=arg_chunk)
+
+                # Cut off at the output limit. Any pending tool call is
+                # incomplete — its arguments JSON stops mid-object — so it is
+                # deliberately dropped rather than emitted with silently
+                # defaulted arguments. Record the truncation and end the turn;
+                # the loop halts on it instead of acting on a partial payload
+                # (issue #52).
+                if finish == "length":
+                    self.response_truncated = True
+                    yield LLMStreamEvent(type="done")
+                    return
 
                 # Finish — emit any pending tool calls regardless of
                 # finish_reason, because some providers (e.g. Moonshot/Kimi)
@@ -652,6 +675,8 @@ class LLMClient:
                         arguments=block.get("input", {}),
                     ))
             stop_reason = data.get("stop_reason", "end_turn")
+            if stop_reason == "max_tokens":
+                self.response_truncated = True
             return LLMResponse(text=text, tool_calls=tool_calls, stop_reason=stop_reason)
         except (KeyError, IndexError) as e:
             raise LLMError(f"Unexpected response format: {e}\n{json.dumps(data, indent=2)}")
@@ -666,6 +691,9 @@ class LLMClient:
                 text = delta.get("text")
                 if text:
                     yield text
+            elif event_type == "message_delta":
+                if chunk.get("delta", {}).get("stop_reason") == "max_tokens":
+                    self.response_truncated = True
 
     def _stream_anthropic_tools(self, messages: list[dict], system: str,
                                 tools: list[dict] | None) -> Generator[LLMStreamEvent, None, None]:
@@ -726,7 +754,9 @@ class LLMClient:
             elif event_type == "message_delta":
                 # Check stop_reason
                 delta = chunk.get("delta", {})
-                if delta.get("stop_reason") == "tool_use":
+                if delta.get("stop_reason") == "max_tokens":
+                    self.response_truncated = True  # issue #52
+                elif delta.get("stop_reason") == "tool_use":
                     pass  # tool_call_end already emitted from content_block_stop
 
         yield LLMStreamEvent(type="done")
