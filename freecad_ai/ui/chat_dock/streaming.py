@@ -13,6 +13,7 @@ from ..message_view import (
     render_thinking_stream_open,
     render_thinking_stream_chunk,
     render_tool_summary,
+    render_truncation_warning,
 )
 from ...core.executor import extract_code_blocks
 from ..chat_workers import _LLMWorker
@@ -144,6 +145,12 @@ class ChatDockStreamingMixin:
 
         # Re-render the full chat to get proper code block formatting
         self._rerender_chat()
+
+        # Warn when the model ran out of output budget mid-answer. Without this
+        # the plan just stops mid-line with no explanation (issue #50).
+        if self._worker and getattr(self._worker, "_response_truncated", False):
+            self._append_html(render_truncation_warning(
+                get_config().max_tokens, palette=self.palette()))
 
         # Empty completion: nothing was stored, so the re-render just wiped
         # the streamed bubble — never let that be silent. Typical cause: the

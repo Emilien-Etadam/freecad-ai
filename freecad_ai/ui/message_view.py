@@ -4,6 +4,7 @@ Converts chat messages (with markdown-ish formatting and code blocks)
 into HTML suitable for display in a QTextBrowser.
 """
 
+import base64
 import html
 import re
 
@@ -11,6 +12,9 @@ from ..i18n import translate
 
 # Match ```python ... ``` code blocks
 CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+
+# Match a trailing fence that was opened but never closed (truncated response)
+UNCLOSED_BLOCK_RE = re.compile(r"```(\w*)[ \t]*\n((?:(?!```).)*)\Z", re.DOTALL)
 
 # Match <think>...</think> blocks
 THINK_BLOCK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
@@ -425,6 +429,28 @@ def render_code_block(code: str, language: str = "python", palette=None,
     )
 
 
+def render_truncation_warning(max_tokens: int, palette=None) -> str:
+    """Warn that the response was cut off at the output-token limit.
+
+    Without this the truncation is silent: the plan simply stops mid-line and the
+    user has no way to tell why it looks unfinished (issue #50).
+    """
+    colors = _resolve_colors(palette)
+    msg = translate(
+        "MessageView",
+        "Response was cut off at the output limit ({max_tokens} tokens). "
+        "Raise Max Output Tokens in Settings → Model Parameters, "
+        "or ask the model to continue."
+    ).replace("{max_tokens}", str(max_tokens))
+    return (
+        f'<div style="margin: 6px 0; padding: 6px 10px; '
+        f'border-left: 3px solid {colors["tool_error_border"]}; '
+        f'background-color: {colors["system_bg"]}; border-radius: 0 4px 4px 0; '
+        f'color: {colors["stdout_text"]}; font-size: 12px;">'
+        f'&#9888; {html.escape(msg)}</div>'
+    )
+
+
 def render_execution_result(success: bool, stdout: str, stderr: str, palette=None) -> str:
     """Render code execution results."""
     colors = _resolve_colors(palette)
@@ -755,10 +781,19 @@ def _format_content(text: str) -> str:
 
         last_end = match.end()
 
-    # Process remaining text after last block
+    # Process remaining text after last block. A trailing fence that was never
+    # closed means the response was cut off mid-block (issue #50) — still render
+    # it as code rather than dumping a wall of unformatted source on the user.
     remaining = text[last_end:]
     if remaining:
-        parts.append(_format_inline(html.escape(remaining)))
+        truncated = UNCLOSED_BLOCK_RE.search(remaining)
+        if truncated:
+            before = remaining[:truncated.start()]
+            if before:
+                parts.append(_format_inline(html.escape(before)))
+            parts.append(render_code_block(truncated.group(2), truncated.group(1) or "python"))
+        else:
+            parts.append(_format_inline(html.escape(remaining)))
 
     return "".join(parts)
 
@@ -891,21 +926,29 @@ def render_thinking_stream_chunk(chunk: str, palette=None) -> str:
     )
 
 
-def render_plan_buttons(code: str, palette=None) -> str:
-    """Plan-mode Execute/Copy anchor buttons."""
+def render_plan_buttons(code: str, palette=None, allow_execute: bool = True) -> str:
+    """Plan-mode Execute/Copy anchor buttons.
+
+    ``allow_execute=False`` withholds Execute for a truncated block: a script cut
+    off mid-expression would raise a SyntaxError or leave half-built geometry, so
+    the user gets Copy only (issue #50).
+    """
     import base64
 
     colors = _resolve_colors(palette)
     encoded = base64.b64encode(code.encode()).decode()
     execute_lbl = translate("MessageView", "Execute")
     copy_lbl = translate("MessageView", "Copy")
-    return (
-        '<div style="margin: 2px 0 8px 0;">'
+    execute_html = (
         f'<a href="execute:{encoded}" style="text-decoration: none; '
         f'background-color: {colors["tool_success_border"]}; '
         f'color: {colors["chat_bg"]}; padding: 3px 12px; '
         f'border-radius: 3px; font-size: 12px; margin-right: 6px;">'
         f'{execute_lbl}</a> '
+    ) if allow_execute else ''
+    return (
+        '<div style="margin: 2px 0 8px 0;">'
+        f'{execute_html}'
         f'<a href="copy:{encoded}" style="text-decoration: none; '
         f'background-color: {colors["code_lang_bg"]}; '
         f'color: {colors["code_text"]}; padding: 3px 12px; '

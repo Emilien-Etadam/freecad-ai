@@ -413,6 +413,19 @@ class AppConfig:
     viewport_resolution: str = "medium"  # "low", "medium", "high"
     mcp_servers: list = field(default_factory=list)
     # Each entry: {"name": str, "command": str, "args": list, "env": dict, "enabled": bool}
+    # Address the addon listens on when acting AS an MCP server (the toolbar
+    # toggle and mcp_server_http.py). Host is deliberately unrestricted,
+    # including non-loopback: the server has no authentication (issue #59), so
+    # the Settings dialog warns about the exposure rather than pretending a
+    # restricted field made it safe. MCP_HOST / MCP_PORT override both.
+    mcp_server_host: str = "127.0.0.1"
+    mcp_server_port: int = 3000
+    # Host headers the server answers to. Empty means "let the transport pick
+    # its own default" (loopback, plus the rejection of a wildcard bind that
+    # would otherwise 403 every client — #60). A non-empty list here is the
+    # deliberate opt-in to a wider policy, e.g. naming the LAN address or
+    # container hostname clients actually dial. MCP_ALLOWED_HOSTS overrides.
+    mcp_server_allowed_hosts: list = field(default_factory=list)
     user_tools_disabled: list = field(default_factory=list)
     scan_freecad_macros: bool = False
     # Dangerous mode: relaxes executor safety layers (static pattern blocking,

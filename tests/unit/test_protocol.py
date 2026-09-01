@@ -137,3 +137,24 @@ class TestErrorCodes:
 
     def test_internal_error(self):
         assert INTERNAL_ERROR == -32603
+
+
+def test_default_protocol_version_matches_what_the_server_advertises():
+    """The header default and the initialize reply must not drift apart."""
+    from freecad_ai.mcp import server
+    from freecad_ai.mcp import protocol
+
+    assert protocol.DEFAULT_PROTOCOL_VERSION == server.PROTOCOL_VERSION
+
+
+def test_supported_protocol_versions_contain_the_default():
+    from freecad_ai.mcp import protocol
+
+    assert protocol.DEFAULT_PROTOCOL_VERSION in protocol.SUPPORTED_PROTOCOL_VERSIONS
+
+
+def test_supported_protocol_versions_exclude_the_2026_redesign():
+    """2026-07-28 is a redesign we do not serve — claiming it would be a lie."""
+    from freecad_ai.mcp import protocol
+
+    assert "2026-07-28" not in protocol.SUPPORTED_PROTOCOL_VERSIONS

@@ -2,7 +2,7 @@
 
 StdioClientTransport — manages a subprocess MCP server (client side).
 StdioServerTransport — reads stdin / writes stdout (server side).
-SSEServerTransport  — serves MCP over HTTP with Server-Sent Events.
+HTTPServerTransport — serves MCP over HTTP: Streamable HTTP and HTTP+SSE.
 """
 
 import json
@@ -263,6 +263,9 @@ class SSEClientTransport:
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
         self._correlator = _RequestCorrelator()
+        # Negotiated MCP revision, latched by MCPClient after initialize. A
+        # client MUST send it on every later request as of 2025-06-18.
+        self.protocol_version = None
         self._resp = None
         self._reader_thread = None
         self._endpoint_url = None
@@ -348,6 +351,8 @@ class SSEClientTransport:
         for key, value in self._headers.items():
             req.add_header(key, value)
         req.add_header("Content-Type", "application/json")
+        if self.protocol_version:
+            req.add_header("MCP-Protocol-Version", self.protocol_version)
         resp = urllib.request.urlopen(
             req, timeout=self._connect_timeout, context=self._ssl_context)
         resp.read()   # drain the 202 body
@@ -385,6 +390,9 @@ class StreamableHTTPClientTransport:
         self._ssl_context = ssl_context
         self._connect_timeout = connect_timeout
         self._session_id = None
+        # Negotiated MCP revision, latched by MCPClient after initialize. A
+        # client MUST send it on every later request as of 2025-06-18.
+        self.protocol_version = None
         self._next_id = 1
         self._id_lock = threading.Lock()
         self._running = False
@@ -455,6 +463,8 @@ class StreamableHTTPClientTransport:
         req.add_header("Accept", "application/json, text/event-stream")
         if self._session_id:
             req.add_header("Mcp-Session-Id", self._session_id)
+        if self.protocol_version:
+            req.add_header("MCP-Protocol-Version", self.protocol_version)
         return urllib.request.urlopen(
             req, timeout=timeout, context=self._ssl_context)
 
@@ -511,13 +521,30 @@ class StdioServerTransport:
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
+# A wildcard bind address is not a name any client's Host header ever
+# carries, so it cannot seed the default Host allowlist (see __init__).
+_WILDCARD_BIND_HOSTS = frozenset({"0.0.0.0", "::"})
 
-class SSEServerTransport:
-    """Server-side transport: serves MCP over HTTP + Server-Sent Events.
+# Cap the Streamable HTTP request body. A negative Content-Length would make
+# rfile.read() block to EOF and pin a worker thread until the socket timeout,
+# answering nothing; an oversized one would buffer the whole body in memory.
+MAX_REQUEST_BODY = 10 * 1024 * 1024
+
+
+class HTTPServerTransport:
+    """Server-side transport: serves MCP over HTTP on one listener.
 
     Endpoints:
-        GET  /sse       — SSE event stream (client subscribes here)
-        POST /messages  — JSON-RPC requests (responses arrive via SSE)
+        POST /mcp       — Streamable HTTP; the JSON-RPC reply comes back
+                          inline as application/json
+        GET  /mcp       — 405; this server offers no server-to-client stream
+        GET  /sse       — legacy HTTP+SSE event stream (client subscribes here)
+        POST /messages  — legacy HTTP+SSE requests (responses arrive via SSE)
+
+    Both transports run side by side so a client connects with whichever it
+    speaks. HTTP+SSE was deprecated in 2026-07-28 with a minimum twelve-month
+    removal window (#65); the spec's own guidance for servers is to host both
+    during it.
 
     Designed for a single connected client at a time (typical for a
     desktop-app MCP server like FreeCAD).
@@ -538,7 +565,18 @@ class SSEServerTransport:
         self._handler: Callable[[dict], dict | None] | None = None
         self._sse_wfile: Any = None
         self._sse_lock = threading.Lock()
+        self._httpd = None
+        self._serving = False
+        self._lifecycle_lock = threading.Lock()
         if allowed_hosts is None:
+            if host.lower() in _WILDCARD_BIND_HOSTS:
+                raise OSError(
+                    "MCP_HOST=%s binds every interface, but no real client's "
+                    "Host header ever names a wildcard address, so every LAN "
+                    "client would get a 403. Set MCP_HOST to the concrete "
+                    "interface address clients will dial (e.g. your LAN IP), "
+                    "or pass allowed_hosts explicitly to opt into a wider "
+                    "policy." % host)
             allowed_hosts = _LOOPBACK_HOSTS | {host.lower()}
         self._allowed_hosts = frozenset(h.lower() for h in allowed_hosts)
         self._allowed_origins = frozenset(allowed_origins)
@@ -561,18 +599,101 @@ class SSEServerTransport:
             return False
         return True
 
+    def bind(self):
+        """Create and bind the listening socket. Raises OSError if unavailable.
+
+        Split out of ``run`` so a caller on the GUI thread learns about a bind
+        failure (EADDRINUSE, EACCES) synchronously. When the bind happened
+        inside the serve thread the traceback went to the console and nothing
+        else: FreeCAD carried on as if the server had started.
+
+        Idempotent — binding an already-bound transport is a no-op.
+        """
+        with self._lifecycle_lock:
+            if self._httpd is None:
+                self._httpd = self._make_server()
+
+    def serve(self, handler: Callable[[dict], dict | None] | None = None):
+        """Serve until stop(). Requires a prior bind()."""
+        with self._lifecycle_lock:
+            if handler is not None:
+                self._handler = handler
+            httpd = self._httpd
+            if httpd is None:
+                raise RuntimeError("bind() must be called before serve()")
+            self._serving = True
+        logger.info(
+            "MCP server listening on http://%s:%d/mcp (legacy HTTP+SSE also "
+            "served at http://%s:%d/sse)",
+            self._host, self._port, self._host, self._port)
+        try:
+            httpd.serve_forever()
+        finally:
+            with self._lifecycle_lock:
+                self._serving = False
+
+    def stop(self):
+        """Shut down and release the socket. Safe when never bound.
+
+        ``shutdown()`` is only safe once ``serve_forever()`` is running: it
+        waits on an event that only serve_forever's exit path sets, so calling
+        it on a bound-but-never-served socket blocks forever. Bound but never
+        served therefore goes straight to ``server_close()``.
+
+        The two values are captured under the lock and then released before
+        any blocking call: holding the lock across ``shutdown()`` would
+        deadlock against ``serve()``'s ``finally`` clause, which needs the
+        same lock to clear ``_serving``.
+
+        Shutting the listening socket down does not touch an already-attached
+        SSE client: its ``process_request_thread`` sits in the keepalive loop
+        and keeps writing, so the client never learns the server went away and
+        its later POSTs are answered 202 by a transport that drops the reply.
+        Closing ``_sse_wfile`` here makes the next keepalive write fail, which
+        ends that thread and gives the client a clean EOF. Everything else
+        already treats a None ``_sse_wfile`` as "no client attached", which is
+        exactly the state left behind. Done outside ``_lifecycle_lock`` for
+        the same deadlock reason as above.
+        """
+        with self._lifecycle_lock:
+            httpd, self._httpd = self._httpd, None
+            serving = self._serving
+
+        with self._sse_lock:
+            wfile, self._sse_wfile = self._sse_wfile, None
+        if wfile is not None:
+            try:
+                wfile.close()
+            except Exception:
+                pass
+
+        if httpd is None:
+            return
+        if serving:
+            httpd.shutdown()
+        httpd.server_close()
+
     def run(self, handler: Callable[[dict], dict | None]):
-        """Start the HTTP server (blocking)."""
+        """Start the HTTP server (blocking). Unchanged: bind, then serve."""
         self._handler = handler
-        server = self._make_server()
-        logger.info("MCP SSE server listening on http://%s:%d", self._host, self._port)
-        server.serve_forever()
+        self.bind()
+        self.serve()
 
     def _make_server(self):
         """Build the threaded HTTP server (split out for testability)."""
         transport = self
 
         class RequestHandler(BaseHTTPRequestHandler):
+            # Without a timeout the connection socket blocks forever, and
+            # ``_write_locked`` holds ``_sse_lock`` across its write: a client
+            # that stops reading would pin that lock and freeze ``stop()`` —
+            # which runs on the Qt main thread — hanging all of FreeCAD (#63).
+            # ``StreamRequestHandler.setup()`` applies this via settimeout().
+            # Generous enough that a merely slow client is not dropped; a
+            # timed-out write surfaces as ``socket.timeout``, which is
+            # ``TimeoutError`` and so already handled as a dropped client.
+            timeout = 30
+
             def log_message(self, fmt, *args):
                 logger.debug(fmt, *args)
 
@@ -590,16 +711,43 @@ class SSEServerTransport:
             def do_GET(self):
                 if not self._authorized():
                     return
-                if self._base_path() == "/sse":
+                path = self._base_path()
+                if path == "/sse":
                     self._handle_sse()
+                elif path == "/mcp":
+                    # The spec allows a server that offers no server-to-client
+                    # stream to refuse GET outright, and we originate no
+                    # server-initiated messages.
+                    self._send_method_not_allowed()
                 else:
                     self.send_error(404)
+
+            def do_DELETE(self):
+                # _authorized() is invoked per-verb by hand — BaseHTTPRequest-
+                # Handler has no dispatch layer to hook — so a new verb that
+                # forgets this call silently bypasses the Host/Origin guard.
+                if not self._authorized():
+                    return
+                if self._base_path() == "/mcp":
+                    # DELETE terminates a session. We issue none.
+                    self._send_method_not_allowed()
+                else:
+                    self.send_error(404)
+
+            def _send_method_not_allowed(self):
+                self.send_response(405)
+                self.send_header("Allow", "POST")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
 
             def do_POST(self):
                 if not self._authorized():
                     return
-                if self._base_path() == "/messages":
+                path = self._base_path()
+                if path == "/messages":
                     self._handle_messages()
+                elif path == "/mcp":
+                    self._handle_streamable()
                 else:
                     self.send_error(404)
 
@@ -629,12 +777,25 @@ class SSEServerTransport:
                             transport._sse_wfile = None
 
             def _handle_messages(self):
-                length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(length).decode("utf-8")
-
+                # Same guard as _handle_streamable, for the same reason (#69):
+                # this endpoint is unauthenticated (#59), so a malformed
+                # header or body must answer with a JSON-RPC error rather
+                # than escape as a traceback in the user's FreeCAD console.
+                # ValueError covers a non-integer Content-Length and
+                # json.JSONDecodeError (a ValueError subclass, so the
+                # pre-existing parse-error behaviour is unchanged); a body
+                # that isn't valid UTF-8 raises UnicodeDecodeError. The range
+                # check matters most: rfile.read(-1) would block to EOF and
+                # pin a worker thread until the socket timeout, answering
+                # nothing at all.
                 try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    if length < 0 or length > MAX_REQUEST_BODY:
+                        raise ValueError(
+                            "Content-Length %d out of range" % length)
+                    body = self.rfile.read(length).decode("utf-8")
                     msg = json.loads(body)
-                except json.JSONDecodeError:
+                except (ValueError, UnicodeDecodeError):
                     err = protocol.make_error(
                         None, protocol.PARSE_ERROR, "Parse error"
                     )
@@ -658,6 +819,87 @@ class SSEServerTransport:
                 if response is not None:
                     transport._send_sse(response)
 
+            def _handle_streamable(self):
+                """Serve one Streamable HTTP POST.
+
+                Unlike ``/messages``, the reply travels back in this very
+                response — there is no side channel and no client to have
+                dropped, so none of the SSE bookkeeping applies.
+
+                The request/notification split is decided by ``id``, not by
+                whether the handler produced something: a request that gets no
+                response is a server bug, and answering it with a bare 202
+                would surface as an unparseable empty body on the client.
+                """
+                # Absent means "assume 2025-03-26" (spec SHOULD), which is what
+                # we speak. A named revision we cannot serve is a 400 (spec
+                # MUST) whose body says which ones we can — a rejection the
+                # client cannot act on is how #60 read to its users.
+                #
+                # This 400 is sent without draining the request body, which is
+                # only safe because self.protocol_version stays the stdlib
+                # default "HTTP/1.0": the connection closes after this
+                # response regardless, so there is no keep-alive stream to
+                # desynchronise. If protocol_version is ever raised to
+                # "HTTP/1.1", this early return needs to drain the body first.
+                version = self.headers.get("MCP-Protocol-Version")
+                if (version is not None
+                        and version not in protocol.SUPPORTED_PROTOCOL_VERSIONS):
+                    self._send_json(400, protocol.make_error(
+                        None, protocol.INVALID_REQUEST,
+                        "Unsupported MCP-Protocol-Version %r. This server "
+                        "speaks %s." % (
+                            version,
+                            ", ".join(sorted(
+                                protocol.SUPPORTED_PROTOCOL_VERSIONS)))))
+                    return
+
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    if length < 0 or length > MAX_REQUEST_BODY:
+                        raise ValueError(
+                            "Content-Length %d out of range" % length)
+                    body = self.rfile.read(length).decode("utf-8")
+                    msg = json.loads(body)
+                except (ValueError, UnicodeDecodeError):
+                    # ValueError covers a non-integer Content-Length and
+                    # json.JSONDecodeError (a ValueError subclass); a body
+                    # that isn't valid UTF-8 raises UnicodeDecodeError. This
+                    # endpoint is unauthenticated (#59), so any of the three
+                    # must answer with a JSON-RPC error, never an uncaught
+                    # exception reaching http.server's generic handler.
+                    self._send_json(400, protocol.make_error(
+                        None, protocol.PARSE_ERROR, "Parse error"))
+                    return
+
+                if not isinstance(msg, dict):
+                    self._send_json(400, protocol.make_error(
+                        None, protocol.INVALID_REQUEST,
+                        "Expected a single JSON-RPC object. Batched requests "
+                        "are not supported."))
+                    return
+
+                msg_id = msg.get("id")
+                try:
+                    response = transport._handler(msg) if transport._handler else None
+                except Exception as e:
+                    response = protocol.make_error(
+                        msg_id, protocol.INTERNAL_ERROR, str(e))
+
+                if msg_id is None:
+                    self.send_response(202)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+
+                if response is None:
+                    response = protocol.make_error(
+                        msg_id, protocol.INTERNAL_ERROR,
+                        "Server produced no response for method %r"
+                        % msg.get("method"))
+
+                self._send_json(200, response)
+
             def _send_json(self, code: int, msg: dict):
                 data = json.dumps(msg, separators=(",", ":")).encode()
                 self.send_response(code)
@@ -667,6 +909,8 @@ class SSEServerTransport:
                 self.wfile.write(data)
 
             def do_OPTIONS(self):
+                if not self._authorized():
+                    return
                 # No permissive CORS: a cross-origin preflight gets no
                 # Access-Control-Allow-Origin, so the browser blocks the
                 # follow-up request (do_POST also rejects it server-side).
@@ -704,3 +948,9 @@ class SSEServerTransport:
             except (BrokenPipeError, ConnectionResetError, OSError):
                 self._sse_wfile = None
                 return False
+
+
+# The class was SSE-only until #65 added the Streamable HTTP route. The old
+# name stays bound to it permanently: mcp_server_entry.py, the wiki and user
+# scripts all import it, and nothing is gained by breaking them.
+SSEServerTransport = HTTPServerTransport

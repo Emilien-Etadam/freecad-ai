@@ -5,7 +5,7 @@ import json
 from ..compat import QtWidgets, QtCore, QtGui
 from ...config import get_config
 from ...core.conversation import Conversation
-from ...core.executor import extract_code_blocks
+from ...core.executor import extract_code_blocks, extract_truncated_block
 from ...i18n import translate
 from ..message_view import (
     render_plan_buttons,
@@ -93,6 +93,12 @@ class ChatDockDisplayMixin:
                     code_blocks = extract_code_blocks(content)
                     for code in code_blocks:
                         html_parts.append(self._make_plan_buttons_html(code))
+                    # A block cut off at the output limit still deserves Copy —
+                    # but never Execute: it would raise mid-expression (#50).
+                    partial = extract_truncated_block(content)
+                    if partial:
+                        html_parts.append(
+                            self._make_plan_buttons_html(partial, allow_execute=False))
 
             full_html = "".join(html_parts)
             self.chat_display.setHtml(full_html)
@@ -102,9 +108,10 @@ class ChatDockDisplayMixin:
         except Exception:
             pass  # Keep existing display content on error
 
-    def _make_plan_buttons_html(self, code):
+    def _make_plan_buttons_html(self, code, allow_execute=True):
         """Create HTML for Plan mode Execute/Copy buttons."""
-        return render_plan_buttons(code, palette=self.palette())
+        return render_plan_buttons(code, palette=self.palette(),
+                                   allow_execute=allow_execute)
 
     def _handle_anchor_click(self, url):
         """Handle clicks on anchor links in the chat (Execute/Copy/Image buttons)."""
