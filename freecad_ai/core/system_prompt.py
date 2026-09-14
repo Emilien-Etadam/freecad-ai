@@ -405,7 +405,8 @@ def get_default_system_prompt(mode: str = "act",
 
 def build_system_prompt(mode: str = "plan", agents_md: str = "",
                         tools_enabled: bool = False,
-                        override: str = "") -> str:
+                        override: str = "",
+                        include_document_context: bool = True) -> str:
     """Build the full system prompt.
 
     Args:
@@ -415,6 +416,11 @@ def build_system_prompt(mode: str = "plan", agents_md: str = "",
         override: If non-empty, replaces the static instruction portion of the
                   prompt. Dynamic sections (document context, skills, AGENTS.md)
                   are still appended.
+        include_document_context: When False, omit the live document state so
+                  the prompt is byte-identical between turns and prompt caches
+                  keep hitting (#47). The caller must then deliver it at the
+                  tail itself — see build_document_context_block(). Skills and
+                  AGENTS.md stay put: both are stable for a session.
     """
     # Static instructions — either user override or generated default
     if override:
@@ -424,12 +430,19 @@ def build_system_prompt(mode: str = "plan", agents_md: str = "",
 
     sections = [static]
 
-    # Document context
-    doc_ctx = get_document_context()
-    if doc_ctx:
-        sections.append("## Current Document State")
-        sections.append(doc_ctx)
-        sections.append("")
+    # Document context. Volatile — it changes with every feature the model
+    # adds — and it sits ahead of the instructions, the skill list and (in
+    # the request proper) the ~12.5k tool block. Prompt caches match on a
+    # prefix and stop at the first differing byte, so leaving it here
+    # invalidates everything behind it on every turn (#47). Callers that
+    # want a stable prefix pass include_document_context=False and deliver
+    # the same text at the tail via build_document_context_block().
+    if include_document_context:
+        doc_ctx = get_document_context()
+        if doc_ctx:
+            sections.append("## Current Document State")
+            sections.append(doc_ctx)
+            sections.append("")
 
     # Available skills
     try:
@@ -458,3 +471,21 @@ def build_system_prompt(mode: str = "plan", agents_md: str = "",
         sections.append("")
 
     return "\n".join(sections)
+
+
+def build_document_context_block() -> str:
+    """The live document state, formatted for delivery at the tail.
+
+    The heading differs from the system-prompt copy on purpose. There is
+    exactly one copy up there and it is always current; down here a
+    snapshot stays pinned to the turn it was taken for, so the transcript
+    accumulates one per turn and calling them all "current" would have
+    each copy contradict the next (#47).
+
+    Empty string when there is nothing to say, so callers can attach
+    unconditionally.
+    """
+    doc_ctx = get_document_context()
+    if not doc_ctx:
+        return ""
+    return "## Document State (at the time of this message)\n" + doc_ctx

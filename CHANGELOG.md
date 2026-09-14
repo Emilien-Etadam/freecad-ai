@@ -5,7 +5,351 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.27.0-alpha] - 2026-09-14
+
+### Changed
+
+- **A model's reasoning now stays in the conversation history by default, and
+  has its own switch.** It used to be kept only when **Optimize prompt for
+  caching** was ticked, on the theory that this was a cache optimisation. It
+  is not. Moonshot's engineers report that their benchmarks show *"a clear,
+  measurable drop in response quality"* on turns whose `reasoning_content` is
+  missing — in ordinary multi-turn conversation, not merely in tool-calling
+  chains — and recommend preserving every turn's reasoning whether or not you
+  care about caching ([forum thread
+  602](https://forum.moonshot.ai/t/does-thinking-keep-decide-whether-historical-reasoning-content-counts-toward-the-prefix-cache-on-kimi-k2-6-and-later/602)).
+
+  A default that quietly degrades replies is not a conservative default, so
+  **Settings → Behavior → Keep model reasoning in conversation history** ships
+  **on** — the only switch in this project to do so on arrival. Untick it and
+  the history goes back to exactly what it held before. This is a deliberate
+  departure from the rule that a new setting defaults to prior behaviour: the
+  prior behaviour is the one the vendor measures as worse.
+
+  What you will notice: the reasoning is written to your saved session and
+  session log alongside the rest of the turn, and it is re-sent to the
+  provider, so it counts against your token quota where the provider bills
+  for it. What does not change: models that reject reasoning in history are
+  unaffected — **Strip thinking from conversation history** still wins and
+  still auto-detects them — and Anthropic is untouched, since it carries
+  thinking as its own signed content block that this field cannot represent.
+
+  **Scope, stated plainly: this covers assistant turns that called a tool** —
+  the Act-mode loop, which is where a FreeCAD session spends its requests and
+  what the vendor thread was about. A turn that produced only text still
+  stores no reasoning: the final answer that closes an Act run, and every
+  Plan-mode reply. Moonshot's advice covers those too, so this is a gap and
+  not a boundary; closing it means capturing reasoning separately in the
+  non-tool streaming path, which is a change to the main streaming code and
+  is tracked as [#84](https://github.com/ghbalf/freecad-ai/issues/84) rather
+  than folded in here.
+
+### Added
+
+- **Requests now ask to be routed back to the cache they filled (#47).** A
+  byte-perfect prefix is necessary but not sufficient. Moonshot's engineers
+  describe a backend of many clusters, each holding its own cache blocks: a
+  follow-up balanced onto a cluster that never saw your conversation pays full
+  price however careful the client was with its bytes. Both Moonshot and OpenAI
+  document a `prompt_cache_key` field for this, and both recommend one value
+  per conversation, so the workbench now sends the conversation's own id -- the
+  same one that names the saved session, so resuming a conversation asks for
+  the cluster it was using before.
+
+  It goes out only with **Optimize prompt for caching** ticked, and only to
+  Moonshot and OpenAI: the other OpenAI-*compatible* endpoints are proxies of
+  varying strictness, and an unfamiliar field is a plausible way to earn a 400
+  on someone's chat. If you set `prompt_cache_key` yourself in Model
+  Parameters, your value is left alone.
+
+  Whether this is worth anything depends on how your provider load-balances,
+  which is not something the workbench can see. Nothing here changes what the
+  model is shown.
+
+### Fixed
+
+- **Two conversations created in the same millisecond got the same id.** The id
+  is a millisecond timestamp; it names the saved session file, so the collision
+  could already have one conversation overwrite another, and it is now also the
+  cache-routing key above. It now carries six random hex characters as well.
+  Existing saved conversations keep the ids they have.
+
+## [0.26.0-alpha] - 2026-09-14
+
+### Fixed
+
+- **The prompt was arranged so that providers could not cache it, which cost
+  you money on every turn (#47).** Providers discount a prompt whose opening
+  they have seen before, but the match is a *prefix* — it compares from the
+  first token and stops at the first byte that differs. The live document
+  state (your object tree, active Body and selection) sat inside the system
+  prompt, ahead of the skill list, your AGENTS.md and the whole conversation
+  history. Adding a single feature changed it, and nothing behind it matched
+  any more.
+
+  Measured on moonshot/kimi-k2.6 across three Act sessions of 14-19 requests:
+  the cached portion only ever took two values, 12,288 and 14,336, while the
+  prompt climbed to 15,620. Both are multiples of 2,048, and `cache read`
+  matches `floor(previous request's prompt / 2048) x 2048` on 24 of 28
+  consecutive request pairs. Every exception is a turn boundary.
+
+  Three honest caveats on those numbers, two of them corrected after release
+  by Moonshot's engineers ([forum thread
+  602](https://forum.moonshot.ai/t/does-thinking-keep-decide-whether-historical-reasoning-content-counts-toward-the-prefix-cache-on-kimi-k2-6-and-later/602)).
+  A session that small cannot show this fix working: the whole message
+  history fits inside one 2,048-token block, so the billed remainder is
+  essentially the prompt's remainder past the last block boundary whatever we
+  do. The 2,048 figure is a fit to one session and nothing more -- block
+  granularity is configured per cluster and per model, some of Moonshot's
+  configurations use 256 tokens, and a stable prefix size plus whichever
+  cluster happened to serve the request explains the same numbers equally
+  well. And the turn-boundary misses were not all ours to fix: the k2.x
+  series runs *interleaved thinking*, in which some reasoning from earlier
+  turns never enters the model at all -- and what never enters the model is
+  never tokenized, so it cannot reach the prefix cache however faithfully the
+  client replays it. The sessions that gain are the long ones, and the gain
+  is that the history *can* be cached at all -- which it could not be before,
+  at any length.
+
+  On providers that cache automatically and for free — OpenAI, DeepSeek and
+  most OpenAI-compatible endpoints — this silently gave up a discount the
+  workbench already qualified for, and because nothing read the `usage`
+  figures, it did so invisibly.
+
+  The fix is opt-in, under **Settings → Behavior**, and both switches are
+  **off by default** so nothing changes until you choose it:
+
+  - **Optimize prompt for caching.** Moves the document state from the top of
+    the system prompt to the end of your most recent message, and on Anthropic
+    marks a cache point covering the tool list. What this recovers is the
+    system prompt and the conversation history, which grow with the session;
+    the tool list was already cached on providers that cache implicitly.
+
+    Each turn keeps the document snapshot it was actually sent with, so the
+    conversation reproduces byte-for-byte every time it is re-sent — which is
+    the property the cache match depends on. On models that echo their reasoning
+    back into the history — Kimi and the other thinking models — the thinking
+    sent for a turn used to be dropped when that turn was stored, so the next
+    request re-rendered the turn differently and the prefix diverged there;
+    it is now kept, which also means it is written to the saved session and
+    the session log alongside the rest of the turn. Whether that recovers
+    any *money* is up to the provider, and on Kimi it does not: the
+    interleaved thinking described above means earlier reasoning may never
+    reach the cache at all. (An earlier version of this entry said `kimi-k2.6`
+    ignores historical reasoning unless asked not to; its engineers have since
+    confirmed the opposite — the unset default already keeps it.) Keeping it
+    is still the right thing to do, for a reason that has nothing to do with
+    caching; see the Unreleased section. A side effect you will see in a
+    long session is that the transcript carries one snapshot per turn rather
+    than a single live one; they are labelled as the state at the time of that
+    message, and the newest is always the one nearest the model's answer.
+
+    > ⚠️ **This may change the assistant's replies.** The model is shown the
+    > same information, but in a different position, and models are sensitive
+    > to where information sits in a prompt. It is off by default for exactly
+    > this reason. If answers get worse after you enable it, turn it back off
+    > and please open an issue — that outcome is worth knowing about.
+
+  - **Log token usage to the Report view.** Prints one line per reply with the
+    prompt and completion token counts and how much of the prompt was served
+    from cache. Turn this on *first* to see what you are paying now, then turn
+    on the caching option and compare. On OpenAI-style providers this adds a
+    field to the request asking for the counts, which a small number of unusual
+    endpoints may reject; if yours does, turn it back off. If a provider
+    ignores that field and reports nothing, the Report view says so once,
+    rather than leaving you unable to tell a silent provider from a broken
+    setting.
+
+  Notes on scope: the Anthropic cache point is only emitted in Act mode, where
+  the same prefix is re-sent on every tool turn and so pays for itself. Plan
+  mode sends no tools and often only one request, and an Anthropic cache
+  *write* costs more than a normal read, so marking it there would have made
+  Plan mode more expensive rather than less. Providers with an explicit
+  cache-creation API rather than an inline marker — Moonshot and Google among
+  them — are unaffected by the second half and would need separate work.
+  Tool reranking, if you have enabled it, varies the tool list per message and
+  will limit how much of the prompt can be cached whatever these settings say.
+- **Test Connection no longer writes your in-progress Settings edits into the
+  live config, where Cancel could not undo them (#76).** Max Output Tokens,
+  Context Window, Max tool-loop turns, Thinking and the System Prompt were
+  staged in the global config so the probe thread could read two of them back
+  off it; nothing restored them on Cancel, and an unrelated save elsewhere in
+  the session then flushed the cancelled edits to disk. The probe is handed
+  its settings directly now, so there is nothing left to roll back. No API key
+  or connection field was ever involved.
+- **The sandbox pre-check no longer blames your code for a document that was
+  already broken (#82).** An object that fails to recompute stays `Touched`, so
+  FreeCAD re-logs its error on *every* later recompute — including the one your
+  code triggers. The pre-check now records which errors the document emits
+  before your code runs and suppresses exactly those, the same way it already
+  suppressed objects that were invalid to begin with.
+
+### Added
+
+- **The sandbox can see C++ console errors again (#83).** It now reads the
+  headless process's stderr, bracketed by markers around your code, instead of
+  an `App.Console.AddObserver` hook that never installed. FreeCAD's own console
+  warning level is turned off for the run, so the stream carries errors only —
+  a redundant-constraint warning no longer reads like a failure. Failures now
+  name the reason ("NoProfilePad: No object linked") rather than only the
+  symptom ("has null shape").
+
+### Changed
+
+- **The sandbox now says when its console-error channel is unavailable.** The
+  pre-execution sandbox has two ways of noticing a problem: it inspects every
+  object's shape, and it hooks `App.Console.AddObserver` to catch errors the
+  C++ layer prints without raising a Python exception. On FreeCAD 1.1.1 in
+  console mode that method does not exist, so the hook raised `AttributeError`
+  into a bare `except: pass` and the second channel collected nothing on every
+  run — while the sandbox went on reporting success as though it had checked
+  both. The failure is now recorded and logged once per session with the
+  reason. (The channel itself is revived above.)
+
+## [0.25.0-alpha] - 2026-09-13
+
+### Added
+
+- **Cloudflare Workers AI is now a provider preset.** Pick it from the
+  provider dropdown in Settings instead of configuring a Custom endpoint
+  by hand. Its chat-completions endpoint is per-account, so the preset's
+  Base URL ships with an `{ACCOUNT_ID}` placeholder that **you must
+  replace with your own Cloudflare account ID** before the profile will
+  work; supply a Workers AI API token as the API key. The default model
+  is `@cf/moonshotai/kimi-k2.7-code`, which is the model tool calling was
+  verified against. Thanks to @Syeed-MD-Talha.
+- **Settings warns about a Base URL you still have to fill in.** Saving a
+  profile whose Base URL contains an unreplaced `{...}` placeholder now
+  asks first, naming the profile. Previously the literal braces were sent
+  in the request path and came back as a bare 404 that pointed at neither
+  the field nor the fix. This extends the existing blank-Base-URL check,
+  so both problems are reported in one message.
+
+### Fixed
+
+- **Arch/BIM code no longer fails the sandbox pre-check.** Creating an
+  Arch Site, Building or Floor was rejected as "has null shape". These
+  containers are organizational groups that hold no geometry of their
+  own, so a null `Shape` is their normal, valid state for their whole
+  lifetime — the check now recognises them by `Proxy.Type` rather than by
+  a `TypeId` they share with unrelated scripted objects. Thanks to
+  @s-light for finding and fixing this.
+- **An unrelated call no longer gets blamed for a pre-existing problem.**
+  The sandbox snapshots which objects are already broken before running
+  your code, so it can tell what your code actually changed. That
+  snapshot was taken without recomputing the document first, while the
+  post-run check always recomputes — so an object that recomputes
+  differently in the headless sandbox than it did live was missing from
+  the snapshot, and every later call, even a read-only one, was reported
+  as having put it in an Invalid state. Thanks to @s-light.
+
+## [0.24.0-alpha] - 2026-09-07
+
+### Added
+
+- **Connection profiles.** LLM connection settings are now named profiles.
+  Define as many as you like — `ollama-local` and `ollama-remote` can
+  coexist with different URLs and keys — and switch between them from the
+  Settings dialog without losing anything.
+- Saving a profile with an empty **Base URL** now asks first, naming the
+  profiles concerned. Such a profile fails with a bare connection error at
+  request time, and profile resolution deliberately does not substitute the
+  provider's preset URL behind your back — so the dialog says so instead.
+- **Per-utility models.** Context compaction, skill evaluation, tool
+  optimisation and tool reranking each choose a profile, or inherit the
+  active one. Run chat on a large cloud model and the throwaway work on a
+  cheap or local one.
+- A **Use this profile for chat** checkbox in the Settings dialog says
+  which profile chat runs on, and the profile dropdown marks it
+  `(active)`. Selecting a profile in the dropdown only opens it for
+  editing — browsing what your profiles hold never re-points chat.
+
+- **Optional bearer token for the MCP server** — a new
+  **AI Settings → MCP Servers → Bearer token** field, with a **Generate**
+  button, and an `MCP_AUTH_TOKEN` environment variable (env wins). When set,
+  every request to the server must carry `Authorization: Bearer <token>`;
+  a missing or wrong one is answered `401` with a `WWW-Authenticate: Bearer`
+  challenge, so a client knows to present a credential rather than that it is
+  barred outright. Empty (the default) leaves the server unauthenticated,
+  exactly as before, so nothing changes for an existing setup. Until now the
+  `Host`-header allowlist was the only thing limiting who could reach a
+  non-loopback server, and it cannot tell one client on that host from
+  another. Both start-up routes read the token — the toolbar toggle and
+  `mcp_server_http.py`. The token must be ASCII: it is compared with
+  `hmac.compare_digest()`, which raises on a non-ASCII operand, so a
+  non-ASCII token is refused when the server starts rather than crashing the
+  handler thread on every request. Contributed by @AmirF194 in
+  [#73](https://github.com/ghbalf/freecad-ai/pull/73), closing
+  [#59](https://github.com/ghbalf/freecad-ai/issues/59).
+
+  Host, port, allowed hosts and the token are all read when the server
+  starts, so changing any of them does not reconfigure a server that is
+  already running — stop and restart it.
+
+### Changed
+
+- The reranker's four-field provider override is replaced by a profile.
+  Existing overrides migrate automatically into a profile named `rerank`.
+- The reranker's **Test reranker** button now probes whichever profile
+  reranking is set to (or the active profile, if left on inherit), instead
+  of its own four fields.
+- **Test Connection** and **Test Reranker** now name the profile they
+  probed. Both deliberately test a profile that need not be the active one
+  — Test Connection tests whichever profile is open in the dialog, so you
+  can verify a new one before switching chat to it, and Test Reranker
+  follows the tool-reranking dropdown — and the status line previously gave
+  no way to tell that apart from a failure of the profile you chat with.
+  It now reads `Testing "ollama-local"...`, then
+  `"ollama-local": Connected! ...` or `"ollama-local": Failed: ...`. The
+  name is captured when the probe starts, so switching profiles while one
+  is in flight cannot mislabel the result.
+- The **Model supports vision** checkbox moved out of **Behavior** and into
+  the **LLM Provider** group, directly under the model it describes. It is
+  a property of one profile's model, not a global setting, and now reads
+  and writes the profile currently open in the dialog.
+
+### Fixed
+
+- Detected model capabilities now belong to the profile they were detected
+  on. Test Connection probes whichever profile is open in the dialog, but
+  vision, tool-calling and thinking support were recorded once for the
+  whole configuration — so testing a reranking or utility profile
+  overwrote the chat model's capabilities, and saved them to disk
+  immediately. The sharpest edge was tool support: probe an embedding
+  model on any profile and the answer "no tools" applied to chat, which
+  then stopped sending tools altogether. Each profile now carries its own
+  detection, retyping a profile's provider or model clears only that
+  profile's now-stale results, and a probe result lands in the dialog's
+  working copy like every other profile field — reaching `config.json` on
+  OK rather than the moment the probe returns. Existing settings migrate
+  onto the active profile on first load, and are still written to the top
+  level of `config.json` so an older version reads them.
+
+- Switching between profiles in the Settings dialog is lossless (#75).
+  Each profile keeps its own base URL, key, model and parameters, so
+  browsing to another profile and back leaves your edits intact and no
+  profile can overwrite another's settings. Pointing a profile at a
+  *different vendor* still loads that vendor's preset URL and model, as it
+  always has — that is an explicit "point this profile elsewhere".
+- Cancelling the Settings dialog now discards profile changes. Adding,
+  renaming, deleting or editing a profile previously took effect
+  immediately, and Test Connection could flush the change to disk before
+  you ever pressed OK.
+- Sampling parameters edited in Settings now take effect, including
+  **Remove**. For a configuration carried over from an earlier version,
+  edits were silently discarded and removed rows came back: parameters
+  lived in two places at once, a per-model dict in `config.json` and the
+  profile, and the dialog could only reach one of them. The profile is now
+  the only source; the per-model dict is left in `config.json`, unread.
+- Clearing a profile's API key now actually clears it. Upgrading copied
+  the key into a second, per-vendor slot that no part of the dialog could
+  edit, so a key cleared to rotate a leaked credential stayed on disk and
+  kept being sent — with Test Connection reporting OK. That slot is no
+  longer written on upgrade; it remains available as a hand-written
+  per-vendor default in `config.json`.
+- Test Connection now succeeds for a profile that leaves its API key blank
+  to inherit the vendor-wide default, matching what normal chat use
+  already did.
 
 <<<<<<< HEAD
 ### Fixed

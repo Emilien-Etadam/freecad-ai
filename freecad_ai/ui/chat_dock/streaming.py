@@ -90,7 +90,8 @@ class ChatDockStreamingMixin:
             for turn_info in self._worker._tool_results:
                 tc_dicts = turn_info["tool_calls"]
                 self.conversation.add_assistant_message(
-                    turn_info["assistant_text"], tool_calls=tc_dicts
+                    turn_info["assistant_text"], tool_calls=tc_dicts,
+                    reasoning_content=turn_info.get("reasoning"),
                 )
                 for r in turn_info["results"]:
                     self.conversation.add_tool_result(r["tool_call_id"], r["content"])
