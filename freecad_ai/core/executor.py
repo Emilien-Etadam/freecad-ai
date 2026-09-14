@@ -13,6 +13,7 @@ Safety layers:
 import inspect
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -22,6 +23,106 @@ import sys
 import tempfile
 import traceback
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+# Written to fd 2 by the harness to bracket the user's code. FreeCAD's C++
+# layer writes its console errors straight to the same descriptor, so an
+# unbuffered os.write here interleaves in true order with them — which is what
+# lets the parent tell "this document was already broken" from "this code
+# broke it".
+_USER_CODE_BEGIN = "__FCAI_USER_CODE_BEGIN__"
+_USER_CODE_END = "__FCAI_USER_CODE_END__"
+
+# A single bad feature can log the same line on every recompute iteration, and
+# a bad document can log dozens of distinct ones. The message goes to an LLM as
+# context, so it is truncated rather than allowed to crowd out the code.
+_MAX_CONSOLE_ERRORS = 10
+
+# Set once the sandbox has reported a broken console-capture channel, so the
+# warning names the problem on the first pre-check of the session instead of
+# on every one. Degradation is a property of the FreeCAD build, not of any
+# single execution — repeating it per call would only teach the reader to
+# scroll past it.
+_CONSOLE_CAPTURE_WARNED = False
+
+
+def _console_errors_from_stderr(stderr) -> list:
+    """Return the FreeCAD console errors the executed code is responsible for.
+
+    ``stderr`` is the sandbox subprocess's captured fd 2. The harness turns the
+    console's ``Wrn`` level off and brackets the user's code with markers, so
+    everything between them is an error rather than a warning.
+
+    Two things are filtered out, both for the same reason — the code under test
+    did not cause them:
+
+    * output before the opening marker, which belongs to opening and first
+      recomputing the document;
+    * output inside the window whose text also appeared in that baseline. An
+      object that failed to recompute stays ``Touched``, so it re-emits its
+      error on *every* later recompute, including the one the user's code
+      triggers. Position alone does not separate those — only the text does.
+      This is the false positive reported as issue #82.
+
+    Missing markers mean the run died before the window could be delimited. The
+    output is then unattributable, and guessing would blame the user's code for
+    the document's pre-existing state, so nothing is reported.
+    """
+    if not stderr:
+        return []
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    if _USER_CODE_BEGIN not in stderr or _USER_CODE_END not in stderr:
+        return []
+
+    before, _, rest = stderr.partition(_USER_CODE_BEGIN)
+    window, _, _after = rest.partition(_USER_CODE_END)
+
+    baseline = {line.strip() for line in before.splitlines() if line.strip()}
+    errors = []
+    for line in window.splitlines():
+        line = line.strip()
+        if not line or line in baseline or line in errors:
+            continue
+        errors.append(line)
+        if len(errors) >= _MAX_CONSOLE_ERRORS:
+            break
+    return errors
+
+
+def _console_capture_warning(result) -> str | None:
+    """Return a warning if the sandbox could not install its console observer.
+
+    The harness hooks ``App.Console.AddObserver`` to catch errors the C++ layer
+    *logs* without raising anything Python can see — a failed attachment or
+    recompute that leaves the document quietly wrong. That hook is optional by
+    construction, and when it does not attach the sandbox keeps validating
+    object state and reports success as though both channels had run.
+
+    ``result`` is the JSON the harness wrote. A missing ``console_capture`` key
+    means the harness predates this field, not that capture failed, so it is
+    not treated as a problem. Returns ``None`` when there is nothing to say.
+    """
+    status = (result or {}).get("console_capture")
+    if not status or status == "ok":
+        return None
+    return (
+        "Sandbox console capture unavailable ({}). Pre-execution checks still "
+        "validate object state, but FreeCAD errors printed by the C++ layer "
+        "without raising a Python exception will not be detected.".format(status)
+    )
+
+
+def _warn_console_capture_once(result) -> None:
+    """Log ``_console_capture_warning`` at most once per session."""
+    global _CONSOLE_CAPTURE_WARNED
+    if _CONSOLE_CAPTURE_WARNED:
+        return
+    message = _console_capture_warning(result)
+    if message:
+        _CONSOLE_CAPTURE_WARNED = True
+        logger.warning(message)
 
 
 @dataclass
@@ -161,14 +262,24 @@ def _collect_object_issues(objects_state, baseline_bad):
     # still lands in an Invalid state and is caught by the invalid_state report
     # below. Kept local so it ships with the function source into the sandbox
     # harness (inspect.getsource doesn't carry module globals).
+    # Arch/BIM containers (Site, Building, BuildingPart/Floor) are pure
+    # organizational groups — they hold no geometry of their own and report a
+    # null Shape for their entire lifetime, empty or fully populated. Flagging
+    # that blocked every Arch.makeSite/makeBuilding/makeFloor call. These are
+    # scripted objects (Part::FeaturePython / App::GeometryPython) — the
+    # generic TypeId is shared with countless unrelated object types, so the
+    # semantic type has to come from Proxy.Type instead (e.g. "Site",
+    # "BuildingPart" — Building and Floor are both BuildingPart under the hood).
     null_shape_ok_types = {"Sketcher::SketchObject", "PartDesign::Body"}
+    null_shape_ok_proxy_types = {"Site", "Building", "BuildingPart", "Floor"}
     issues = []
     for st in objects_state:
         name = st["name"]
         if name in baseline_bad:
             continue
         if st.get("null"):
-            if st.get("type") not in null_shape_ok_types:
+            if (st.get("type") not in null_shape_ok_types
+                    and st.get("proxy_type") not in null_shape_ok_proxy_types):
                 issues.append("Object '" + name + "' has null shape")
         elif st.get("invalid"):
             issues.append("Object '" + name + "' has invalid shape")
@@ -239,33 +350,36 @@ def _sandbox_test(code: str, timeout: int = 15, document_path: str | None = None
     # Harness: run user code, then close all documents without saving (temp copy is disposable).
     # Stub FreeCADGui view methods that only work in a graphical session.
     # Harness captures two classes of failure that Python exceptions miss:
-    #   1. FreeCAD.Console.PrintError messages (C++ layer logging — e.g.
-    #      PositionBySupport attachment failures, topological naming mismatches)
+    #   1. Errors the C++ layer logs to fd 2 (PositionBySupport attachment
+    #      failures, topological naming mismatches) — bracketed by markers
+    #      here, read and baselined by the parent after the process exits
     #   2. Features that build a null/invalid Shape without raising
-    harness = '''import sys, json, traceback
+    harness = '''import sys, os as _os, json, traceback
 {collect_fn_src}
 result = {{"ok": False, "error": ""}}
 try:
     import FreeCAD as App
 
-    # Console observer — captures errors/warnings the C++ layer logs to the
-    # Report View. Without this, attachment and recompute failures silently
-    # pass the sandbox because no Python exception is raised.
-    class _ErrObs:
-        def __init__(self):
-            self.errors = []
-            self.warnings = []
-        def OnError(self, msg, *a, **kw):
-            self.errors.append(str(msg).strip())
-        def OnWarning(self, msg, *a, **kw):
-            self.warnings.append(str(msg).strip())
-    _err_obs = _ErrObs()
-    _observer_installed = False
+    # Console channel: FreeCAD's C++ layer logs attachment and recompute
+    # failures without raising anything Python can catch, and writes them to
+    # fd 2. The parent reads that stream (see _console_errors_from_stderr).
+    #
+    # PrintError and PrintWarning both land there with no severity prefix, so
+    # the stream cannot be sorted out after the fact — a redundant-constraint
+    # warning would read exactly like a failure. SetStatus drops the warnings
+    # at the source instead, leaving fd 2 carrying errors only. If that call
+    # fails the parent is told, and ignores the stream rather than guessing.
+    #
+    # An App.Console.AddObserver hook used to do this job. It never ran: the
+    # method does not exist on __FreeCADConsole__ in console mode, so it raised
+    # into a bare except and the channel was silently dead (#83).
+    _console_capture_status = "ok"
     try:
-        App.Console.AddObserver(_err_obs)
-        _observer_installed = True
-    except Exception:
-        pass
+        App.Console.SetStatus("Console", "Wrn", False)
+    except Exception as _gate_err:
+        _console_capture_status = "{{}}: {{}}".format(
+            type(_gate_err).__name__, _gate_err)
+    result["console_capture"] = _console_capture_status
 
     # Console mode: install a fake FreeCADGui module instead of importing the
     # real one. LLM-generated code routinely ends with view-framing cosmetics
@@ -304,35 +418,50 @@ try:
                 pass
         _state = getattr(_obj, "State", None)
         _bad_state = bool(_state and "Invalid" in _state)
+        _proxy_type = getattr(getattr(_obj, "Proxy", None), "Type", "")
         return {{"name": _obj.Name, "type": getattr(_obj, "TypeId", ""),
+                 "proxy_type": _proxy_type,
                  "null": _null, "invalid": _invalid, "invalid_state": _bad_state}}
 
     # Baseline: objects already broken in the opened document BEFORE user code
     # runs. The sandbox dry-runs against a copy of the saved document, so an
     # imported-and-converted mesh→solid that OCC considers invalid is present
     # on every run; without this snapshot it would fail unrelated code.
+    #
+    # Recompute once here, BEFORE snapshotting the baseline. The document was
+    # opened fresh (its on-disk cached shapes reflect whatever environment
+    # last saved it — typically the real GUI process), but the post-execution
+    # check further down forces its own doc.recompute() unconditionally. Some
+    # objects (e.g. a complex Arch::Wall whose Draft/OCC boolean fuse is
+    # sensitive to the fake-FreeCADGui/headless environment here) recompute
+    # differently under this sandbox than they did live — genuinely fine in
+    # the user's document, but landing in an Invalid state the moment this
+    # harness recomputes it. Without matching that recompute before the
+    # baseline snapshot, such an object is absent from `_baseline_bad` and
+    # every subsequent call — even a no-op read — gets its Invalid state
+    # blamed on that call's code.
+    doc.recompute()
     _baseline_bad = set()
     for _obj in doc.Objects:
         _s = _snap(_obj)
         if _s["null"] or _s["invalid"] or _s["invalid_state"]:
             _baseline_bad.add(_s["name"])
 
+    # Everything logged up to here describes the document as it was opened.
+    _os.write(2, b"\\n{begin_marker}\\n")
+
     # --- user code ---
 {indented_code}
     # --- end user code ---
     doc.recompute()
+    _os.write(2, b"\\n{end_marker}\\n")
 
     # Post-execution validation: collect console errors + flag only the shapes
     # this code created or newly broke. Either signal means the code "ran" but
     # broke the model — the case where Python-exception-only checking fails.
+    # Console errors are merged by the parent, which is the only side that can
+    # read this process's stderr.
     _issues = []
-    if _observer_installed:
-        # De-dup — C++ logs the same error per failed recompute iteration
-        _seen = set()
-        for _e in _err_obs.errors:
-            if _e and _e not in _seen:
-                _seen.add(_e)
-                _issues.append("FreeCAD error: " + _e)
     _objects_state = [_snap(_obj) for _obj in doc.Objects]
     _issues.extend(_collect_object_issues(_objects_state, _baseline_bad))
 
@@ -361,6 +490,8 @@ finally:
     _os._exit(0)
 '''.format(
         collect_fn_src=inspect.getsource(_collect_object_issues),
+        begin_marker=_USER_CODE_BEGIN,
+        end_marker=_USER_CODE_END,
         open_block=open_block,
         indented_code="\n".join("    " + line for line in code.splitlines()),
         result_path=result_file,
@@ -395,10 +526,28 @@ finally:
         if os.path.exists(result_file):
             with open(result_file) as f:
                 result = json.load(f)
-            if result["ok"]:
+            _warn_console_capture_once(result)
+
+            # Merged here rather than in the harness because this is the only
+            # side that can read the subprocess's stderr. Trusted only when the
+            # harness confirmed it gated warnings off — otherwise the stream
+            # mixes severities, and reporting a redundant-constraint warning as
+            # a failure is precisely the false positive of issue #82.
+            console_errors = []
+            if result.get("console_capture") == "ok":
+                console_errors = _console_errors_from_stderr(proc.stderr)
+
+            if result["ok"] and not console_errors:
                 return True, ""
-            else:
-                return False, "Sandbox: " + result["error"]
+
+            problems = []
+            if not result["ok"]:
+                problems.append(result["error"])
+            if console_errors:
+                problems.append(
+                    "FreeCAD logged errors while running this code:\n"
+                    + "\n".join(console_errors))
+            return False, "Sandbox: " + "\n".join(problems)
 
         return True, ""  # No result file but process exited OK
 

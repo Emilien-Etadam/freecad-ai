@@ -184,6 +184,22 @@ class TestProviderPresets:
         # PROVIDER_PRESETS should have exactly the same keys as PROVIDERS
         assert set(PROVIDER_PRESETS.keys()) == set(PROVIDERS.keys())
 
+    def test_cloudflare_preset_defaults_to_a_tool_tested_model(self):
+        """PR #74: the default must be a model tool calling was verified on.
+
+        ``supports_tools`` is the sole source of truth for every non-Ollama
+        provider — there is no runtime capability probe — so a default model
+        that rejects the ``tools`` parameter makes Act mode fail with a 400
+        instead of degrading. The contributor exercised the kimi model; the
+        llama one it originally shipped was untested.
+        """
+        from freecad_ai.llm.providers import PROVIDERS
+        assert (PROVIDER_PRESETS["cloudflare-workers-ai"]["default_model"]
+                == "@cf/moonshotai/kimi-k2.7-code")
+        # supports_tools lives only on the canonical dict: PROVIDER_PRESETS
+        # is a four-field projection for the dialog's auto-fill.
+        assert PROVIDERS["cloudflare-workers-ai"]["supports_tools"] is True
+
     def test_github_preset_recommends_reranker(self):
         """Issue #10: GitHub Models has a small per-request input cap.
 
@@ -229,9 +245,10 @@ class TestSaveLoad:
 
     def test_load_seeds_rerank_params_from_legacy_override_slot(self, tmp_config_dir):
         """Migration: pre-namespace configs stored the reranker override
-        model's params inside the shared model_params dict. On load, seed the
-        new rerank_params namespace from that slot so override users don't
-        silently lose their reranker params (issue #30 follow-up)."""
+        model's params inside the shared model_params dict. Those params must
+        still reach the reranker so override users don't silently lose them
+        (issue #30 follow-up). They now land on the "rerank" profile, which is
+        what create_client reads; the rerank_params field itself is legacy."""
         import freecad_ai.config as config_mod
         os.makedirs(os.path.dirname(config_mod.CONFIG_FILE), exist_ok=True)
         with open(config_mod.CONFIG_FILE, "w") as f:
@@ -241,7 +258,8 @@ class TestSaveLoad:
                 "model_params": {"rr-model": {"temperature": 0.0, "top_k": 20}},
             }, f)
         c = load_config()
-        assert c.rerank_params == {"temperature": 0.0, "top_k": 20}
+        assert c.profiles["rerank"].params == {"temperature": 0.0, "top_k": 20}
+        assert c.utility_profiles["rerank"] == "rerank"
 
     def test_load_does_not_seed_rerank_params_in_inherit_mode(self, tmp_config_dir):
         """No reranker override model → nothing to migrate; rerank_params
@@ -1245,3 +1263,19 @@ def test_mcp_server_allowed_hosts_defaults_to_empty():
     """
     from freecad_ai.config import AppConfig
     assert AppConfig().mcp_server_allowed_hosts == []
+
+
+def test_mcp_server_auth_token_defaults_to_empty():
+    """Empty means "no token configured", which leaves the server exactly as
+    unauthenticated as before this field existed (#59): opt-in, not on by
+    default.
+    """
+    from freecad_ai.config import AppConfig
+    assert AppConfig().mcp_server_auth_token == ""
+
+
+def test_mcp_server_auth_token_roundtrip():
+    from freecad_ai.config import AppConfig
+    cfg = AppConfig(mcp_server_auth_token="s3cr3t")
+    restored = AppConfig.from_dict(cfg.to_dict())
+    assert restored.mcp_server_auth_token == "s3cr3t"

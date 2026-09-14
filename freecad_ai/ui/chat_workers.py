@@ -24,7 +24,8 @@ import json
 import time
 
 from ..config import get_config
-from ..core.loop_control import resolve_turn_outcome, should_continue_loop
+from ..core.loop_control import (
+    reasoning_to_persist, resolve_turn_outcome, should_continue_loop)
 
 class _LLMWorker(QThread):
     """Background thread that streams LLM responses with optional tool loop.
@@ -65,15 +66,23 @@ class _LLMWorker(QThread):
         self._pending_result = None
         self._max_tool_turns = get_config().max_tool_turns  # 0 = endless
         self._strip_thinking = False  # resolved in run()
+        self._optimize_caching = False  # resolved in run()
+        self._preserve_reasoning = True  # resolved in run()
         self._tool_timeline = []  # timing data for summary visualization
 
     def run(self):
         try:
             from ..llm.client import create_client_from_config, should_strip_thinking
             from ..config import get_config as _get_config
-            client = create_client_from_config()
+            # Every request in one conversation carries the same cache key, so
+            # the provider can keep routing them to the cluster that already
+            # holds this conversation's prefix cache (#47).
+            client = create_client_from_config(
+                cache_key=getattr(self.conversation, "conversation_id", ""))
             self._strip_thinking = should_strip_thinking(
                 client.model, _get_config().strip_thinking_history)
+            self._optimize_caching = _get_config().optimize_prompt_caching
+            self._preserve_reasoning = _get_config().preserve_reasoning_history
 
             # Re-format messages with image interception on worker thread
             if self.conversation and self.describe_fn:
@@ -284,6 +293,11 @@ class _LLMWorker(QThread):
             # Store tool call info so the parent can update the conversation
             self._tool_results.append({
                 "assistant_text": turn_text,
+                # What the provider was shown for this turn, so the stored
+                # history can re-render it unchanged (#47).
+                "reasoning": reasoning_to_persist(
+                    turn_thinking, self._strip_thinking, self._optimize_caching,
+                    self.api_style, self._preserve_reasoning),
                 "tool_calls": tc_dicts,
                 "results": [
                     {"tool_call_id": tc.id, "content": r["content"] if self.api_style != "anthropic" else r["content"][0]["content"]}

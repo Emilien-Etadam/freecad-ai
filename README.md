@@ -35,7 +35,7 @@ This is a fork of [ghbalf/freecad-ai](https://github.com/ghbalf/freecad-ai) (syn
 - **Thinking mode** — enable LLM reasoning for complex multi-step tasks (Off / On / Extended)
 - **Context compacting** — automatically summarizes older messages when approaching context limits
 - **Session resume** — save and load chat sessions to continue work later
-- **20 LLM providers** — Anthropic, OpenAI, Ollama, Gemini, OpenRouter, Moonshot, DeepSeek, Qwen, Groq, Mistral, Together, Fireworks, xAI, Cohere, SambaNova, MiniMax, Llama, GitHub Models, HuggingFace, Zhipu, plus any OpenAI-compatible endpoint via Custom
+- **21 LLM providers** — Anthropic, OpenAI, Ollama, Gemini, OpenRouter, Cloudflare Workers AI, Moonshot, DeepSeek, Qwen, Groq, Mistral, Together, Fireworks, xAI, Cohere, SambaNova, MiniMax, Llama, GitHub Models, HuggingFace, Zhipu, plus any OpenAI-compatible endpoint via Custom
 - **Context-aware** — automatically includes document state (objects, properties, selection) in prompts
 - **Error self-correction** — failed code is sent back to the LLM for automatic retry (up to 3 attempts)
 - **AGENTS.md support** — project-level instructions with include directives and variable substitution
@@ -173,6 +173,7 @@ To populate the stores once:
 | OpenAI | Yes | GPT models |
 | Gemini | Yes | Google AI via OpenAI-compatible endpoint |
 | OpenRouter | Yes | Multi-provider gateway |
+| Cloudflare Workers AI | Yes (Workers AI token) | Per-account endpoint — replace `{ACCOUNT_ID}` in the Base URL with your Cloudflare account ID before use |
 | Moonshot | Yes | Kimi models (default params pre-configured) |
 | DeepSeek | Yes | DeepSeek-V3 |
 | Qwen | Yes | Alibaba DashScope (international) |
@@ -190,9 +191,31 @@ To populate the stores once:
 | Zhipu | Yes | GLM models (z.ai international) |
 | Custom | Varies | Any OpenAI-compatible endpoint |
 
+### Connection profiles
+
+Connection settings — provider, base URL, API key, model, sampling parameters —
+are stored as named **profiles**, not a single flat set. You can define as many
+as you like, including several for the same vendor: `ollama-local` and
+`ollama-remote` can coexist with different URLs and keys, and switching between
+profiles in the Settings dialog never touches the ones you're not looking at.
+A profile's API key can be left blank to fall back to a vendor-wide default
+key, so one Anthropic key can serve several Anthropic profiles. Those defaults
+live in the `provider_keys` object in `config.json` and are set by hand — the
+Settings dialog edits a profile's own key, and clearing that field clears it.
+
+Beyond the active profile chat uses, four utility jobs each pick their own
+profile from a dropdown in Settings: context compaction, skill evaluation,
+tool optimisation, and tool reranking. Left on **inherit**, a utility runs on
+whatever profile is currently active; pointed at a specific profile, it always
+uses that one — for example, running chat on a capable cloud model while
+compaction and reranking run on a cheap or local one.
+
+Existing configurations migrate to this shape automatically the first time
+you load them — there is nothing to do by hand.
+
 ### Model Parameters
 
-The **Model Parameters** table in Settings lets you set arbitrary sampling parameters (temperature, top_p, top_k, etc.) that are sent with each API request. Parameters are saved per model name — when you switch models, the saved parameters for that model are loaded automatically.
+The **Model Parameters** table in Settings lets you set arbitrary sampling parameters (temperature, top_p, top_k, etc.) that are sent with each API request. Parameters belong to the profile you are editing, so two profiles never share them — even when they name the same model — and removing a row removes the parameter. Removing *every* row is different: a profile with no parameters of its own falls back to the provider's recommended defaults, which is what you will see the next time you open Settings. The per-model defaults written by earlier versions are still in `config.json` but are no longer read; on upgrade the entry for your current model is copied into your profile once.
 
 Click **Load Defaults** to reset to the provider's recommended values. For most providers the only default is `temperature: 0.3`. Moonshot ships with pre-configured values required by Kimi-K2.5.
 
@@ -295,7 +318,7 @@ Three ways to start it, differing in who owns the FreeCAD process:
     'exec 3>&1 1>&2 && /path/to/FreeCAD.AppImage -c /path/to/freecad-ai/mcp_server_entry.py'
   ```
 
-> **The MCP server has no authentication.** Anything that can reach the address it is bound to can run FreeCAD tools, including arbitrary Python. On the `127.0.0.1` default that means any process on your machine. Tracked in [#59](https://github.com/ghbalf/freecad-ai/issues/59).
+> **The MCP server is unauthenticated by default.** Anything that can reach the address it is bound to can run FreeCAD tools, including arbitrary Python. On the `127.0.0.1` default that means any process on your machine. Set a bearer token in the **AI Settings** MCP Servers section (or `MCP_AUTH_TOKEN`) to require `Authorization: Bearer <token>` on every request; clients pass it as a header (e.g. `claude mcp add --transport http freecad http://127.0.0.1:3000/mcp -H "Authorization: Bearer <token>"`).
 
 Note that Claude Code loads MCP tools **at session start** — a server added mid-session won't appear until the next launch.
 
